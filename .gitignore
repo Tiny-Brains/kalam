@@ -1,0 +1,7 @@
+# Rust build output. Nothing here builds today, but the game engine arrives in
+# plugins/ as a cartridge compiled to wasm (P3), and its build tree is not the
+# artifact -- the committed .wasm is, for the same reason as in jodi/.
+target/
+
+# Local run artifacts
+.run/

@@ -1,0 +1,4 @@
+The wave claim channel lives here. It is deliberately NOT written yet: a claim channel with no wave
+workflow behind it would take `pending` rows this replica cannot play and leave them to lapse until
+the reap. It arrives with the workflow, once layer 03 is written -- see the README, and
+`design/v2/kalam-gaps.md` item 1.6.

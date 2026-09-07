@@ -1,0 +1,4 @@
+The wave loop lives here: claim, the residency barrier, worldgen, the turn loop, renew, the finish
+per row, drain. It is blocked on layer 03 (which owes K, N and the lease, and how a fixed task list
+finishes K matches ending on different turns), on layer 04's play half, and on the wave-turn spike
+that turns those guesses into numbers. `design/v2/kalam-gaps.md` §5 is the list.

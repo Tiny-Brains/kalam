@@ -1,0 +1,14 @@
+{
+  "id": "kalam-db",
+  "name": "kalam-db",
+  "connector_type": "db",
+  "tags": ["pkg:kalam"],
+  "config": {
+    "type": "db",
+    "connection_string": "env://KALAM_DB_URL",
+    "max_connections": 10,
+    "connect_timeout_ms": 5000,
+    "query_timeout_ms": 15000,
+    "operations": { "delete": false }
+  }
+}
