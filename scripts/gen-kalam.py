@@ -11,8 +11,8 @@ here, so they live here and this script inlines them -- the same argument, and t
 The generated files ARE the package: committed, loaded by scripts/load-package.sh, and what a
 reviewer reads for the task graph. Re-run this after changing a statement and commit the result.
 
-The specification is `design/v2/03-kalam.md` (layer 03), whose statements are
-`design/v2/01-match-table.md` §4. `design/v2/03-spike/orion/gen-spike.py` is the draft this grew
+The specification is docs/design.md, whose statements are soma/docs/schema.md §4. The wave-turn
+spike is the draft this grew
 from: the spike drove the same loop against a stub engine and a stub loader and measured it, so
 the loop shape, decision 33's drain and the strike accumulator are transcribed from something
 watched working rather than argued.
@@ -21,7 +21,7 @@ watched working rather than argued.
 WHAT THE BUILD FOUND THAT LAYER 03 DOES NOT SAY. Each of these is a thing the workflow could
 not have been written correctly without, and none was discoverable from the documents.
 
-  1. THE WAVE IS READ TWICE, and it has to be. Layer 03 §4.1 reads the claim once and numbers it,
+  1. THE WAVE IS READ TWICE, and it has to be. docs/design.md §4.1 reads the claim once and numbers it,
      then the barrier drops some rows, then §4.2 builds worlds from "the started rows' seeds".
      Those two numberings disagree the moment the barrier refuses anything: the engine indexes its
      matches 0..n_started-1 while the refs still carry 0..n_claimed-1, so `observe` -- which
@@ -31,13 +31,13 @@ not have been written correctly without, and none was discoverable from the docu
      BEFORE the barrier (unnumbered, for the hold) and the wave is read AFTER `start`, numbered,
      filtered on status = 'running'.
 
-  2. THE BARRIER'S UNIT IS A MODEL, NOT A ROW. Layer 01 §4.4 takes a uuid[] of match ids, but the
+  2. THE BARRIER'S UNIT IS A MODEL, NOT A ROW. soma/docs/schema.md §4.4 takes a uuid[] of match ids, but the
      loader answers about (weights_hash, adapter_hash) pairs, and mapping a refused model back to
      the rows that seat it is a join from element scope into root scope -- the one thing JSONLogic
      here cannot do. So release and fail take the refused HASHES and let Postgres do the join.
      Fewer moving parts, and one round trip either way.
 
-  3. `step` TAKES THE EXPLICIT {m, seat, action} FORM, not the positional one. Layer 03 §4.4
+  3. `step` TAKES THE EXPLICIT {m, seat, action} FORM, not the positional one. docs/design.md §4.4
      specifies positional alignment with the last `observe`. That is correct only if every live
      seat is played, and §4.5 says a forfeited seat is not sent to the loader at all -- so the
      reply is shorter than the view list and every action after the first forfeit lands in the
@@ -53,11 +53,11 @@ not have been written correctly without, and none was discoverable from the docu
      finished match). So `carry` snapshots the ending matches' refs into `data.done_refs` on the
      turn they end, which is the only turn they still exist.
 
-  6. `/play`'s ROW REPLY HAS NO `fault` FIELD (layer 04 §3.2 vs. the built api.rs), so layer 03
+  6. `/play`'s ROW REPLY HAS NO `fault` FIELD (axon/docs/design.md §3.2 vs. the built api.rs), so docs/design.md
      §4.7's "a fault Kalam can attribute mid-play" has no signal to branch on. Every per-row error
      is therefore a strike, which is §4.5's rule and covers the case.
 
-Six mechanics of Orion 1.7.0, each measured on the running server (`design/v2/03-spike/FINDINGS.md`
+Six mechanics of Orion 1.7.0, each measured on the running server (`the wave-turn spikeFINDINGS.md`
 has the ones the spike found; these are new):
 
   * `storage_presign` returns the URL as a PLAIN STRING, not an object.
@@ -165,7 +165,7 @@ def wrote(path: str) -> dict:
 
 # ======================================================================= the statements
 #
-# Every one is layer 01 §4, and every one is conditioned on the claim token so a stale attempt
+# Every one is soma/docs/schema.md §4, and every one is conditioned on the claim token so a stale attempt
 # updates nothing (principle 4). Where this file departs from 01 §4 as written, the reason is in
 # the module docstring and repeated at the statement.
 
@@ -224,7 +224,7 @@ UPDATE matches m
 """
 
 # --- the models the wave needs ----------------------------------------------------------
-# NOT in layer 01. It exists because the barrier runs before the wave can be numbered (docstring
+# NOT in soma/docs/schema.md. It exists because the barrier runs before the wave can be numbered (docstring
 # 1), and because deduplicating in SQL is one `DISTINCT` against a `distinct`-plus-`map` in
 # JSONLogic. The reply is already the exact body /load wants.
 K_MODELS = """
@@ -255,7 +255,7 @@ UPDATE matches
 
 # --- 4.4 fail, set-valued ---------------------------------------------------------------
 # Refused BY NAME -- a hash mismatch, a graph or adapter that will not build. Failed at once, with
-# the seat it is attributed to. This is layer 03 §4.2's ask of layer 01 §4.4, in the shape
+# the seat it is attributed to. This is docs/design.md §4.2's ask of soma/docs/schema.md §4.4, in the shape
 # docstring 2 argues for: a barrier can refuse several models at once, and DISTINCT ON picks the
 # lowest offending seat when a row has more than one.
 # $1 token · $2 [{weights_hash, reason}].
@@ -282,7 +282,7 @@ UPDATE matches SET status = 'running'
 """
 
 # --- 4.3 read the wave, numbered --------------------------------------------------------
-# Layer 03 §4.1's ask of layer 01 §4.3, plus docstring 1: it runs AFTER `start` and filters on
+# docs/design.md §4.1's ask of soma/docs/schema.md §4.3, plus docstring 1: it runs AFTER `start` and filters on
 # 'running', so `m` numbers the rows that will actually be played and the engine's match indices
 # and the refs agree by construction. `m` is repeated onto every seat because the refs are a FLAT
 # list the engine matches on (m, seat) -- JSONLogic cannot number a list, so Postgres does it.
@@ -365,7 +365,7 @@ NOTHING_STARTED = {"and": [TURN0, {"==": [var("temp_data.started.rows_affected")
 DO_RENEW = {"and": [LIVE,
                     {">": [var("temp_data.i"), 0]},
                     {"==": [{"%": [var("temp_data.i"), vars_("renew_every_n_turns")]}, 0]}]}
-# Layer 03 §4.6: halt on ANY shortfall, where the expectation is the rows this wave still has
+# docs/design.md §4.6: halt on ANY shortfall, where the expectation is the rows this wave still has
 # running. All of a wave's rows carry one lease and expire together, so a partial renew cannot
 # happen in the ordinary course -- if it does, this replica's grip is not what it believes.
 RENEW_LOST = {"and": [DO_RENEW,
@@ -435,7 +435,7 @@ TASKS = [
     ), cond=TURN0),
 
     task("split", "Partition the reply by fault, not by reason word", mapping(
-        # Layer 04 §6: the split reads `fault`, so a reason word added to the loader later costs no
+        # axon/docs/design.md §6: the split reads `fault`, so a reason word added to the loader later costs no
         # change here. `===` throughout: `fault` is absent on a resident model, and loose equality
         # against a path that does not resolve silently selects the falsy elements.
         ("temp_data.refused_mem", {"map": [
@@ -464,7 +464,7 @@ TASKS = [
     ), cond=TURN0),
 
     # A halt cannot release the models, so the empty-wave exit is an unload plus a terminal task
-    # rather than a filter. Layer 03 §4.2: "nothing started means unload and end".
+    # rather than a filter. docs/design.md §4.2: "nothing started means unload and end".
     task("idle-unload", "Nothing playable: release what was held", loader(
         "/unload", {"models": var("temp_data.mods")}, "temp_data.unheld",
     ), cond=NOTHING_STARTED),
@@ -545,7 +545,7 @@ TASKS = [
                     "weights_hash": var("ref.weights_hash"),
                     "adapter_hash": var("ref.adapter_hash"),
                     "observation": var("view"),
-                    "ref": var("ref"),          # echoed verbatim -- layer 04 §3.2
+                    "ref": var("ref"),          # echoed verbatim -- axon/docs/design.md §3.2
                 }]},
                 "deadline_ms": vars_("turn_ms"),
                 "budget_ops": vars_("budget_ops"),
@@ -640,7 +640,7 @@ TASKS = [
     # that fires once per match, against six tasks whatever K is. The delay a drain adds is a few
     # turns, invisible against count's ten-second tick.
     task("results", "Ranks, scores and an end reason", plugin(f"{ENGINE}.finish", {
-        # Called while matches are still running, which layer 03 §8 asked layer 05 to rule on: the
+        # Called while matches are still running, which docs/design.md §8 asked ants/docs/ants/docs/cartridge.md to rule on: the
         # engine reports `done` per match and the drain reads only the head's entry, so it is safe.
         "wave_state": var("data.state"), "output": "temp_data.fin",
     }), cond=PENDING),
@@ -727,7 +727,7 @@ TASKS = [
                 "scores": var("temp_data.hres.r.scores"),
                 "reason": var("temp_data.hres.r.reason"),
                 "turns": var("temp_data.hres.r.turns"),
-                # The action stream, not frames -- DESIGN.md §8. `replay-decode` re-simulates it.
+                # The action stream, not frames -- the platform design §8. `replay-decode` re-simulates it.
                 "deltas": var("temp_data.hdeltas.items"),
             },
             # An S3 PUT answers with an empty body, and http_call parses JSON unless told not to.
@@ -786,13 +786,13 @@ WAVE = {
         "its replay under a key naming the attempt. Every statement is conditioned on the claim "
         "token, so a stale attempt updates nothing. It reads no rating and writes no rating, and "
         "its database role cannot reach one. On SIGTERM Orion stops claiming and lets the wave in "
-        "hand finish inside cron.shutdown_timeout_secs. 03-kalam.md; the statements are "
-        "01-match-table.md §4."
+        "hand finish inside cron.shutdown_timeout_secs. docs/design.md; the statements are "
+        "soma/docs/schema.md §4."
     ),
     "tags": ["pkg:kalam"],
     "condition": True,
     # max_turns + K: the drain finishes one match per sweep, so a wave whose matches all end on the
-    # last turn needs K more sweeps to empty its queue (layer 03 §4).
+    # last turn needs K more sweeps to empty its queue (docs/design.md §4).
     "loop": {"counter": "i", "max": 1100},
     "tasks": TASKS,
 }

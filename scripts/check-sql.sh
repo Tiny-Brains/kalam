@@ -4,13 +4,13 @@
 #   kalam/scripts/check-sql.sh            # needs the db container up
 #
 # Kalam's statements live twice: readably in scripts/gen-kalam.py, and inlined as single-line JSON
-# strings in the workflow it generates. design/v2/01-verify/run.sh proves the DESIGN's copy on
+# strings in the workflow it generates. soma/scripts/verify/run.sh proves the DESIGN's copy on
 # Postgres; this proves the SHIPPED one -- it pulls each `query` out of workflows/*.json and asks
 # Postgres to parse and plan it. A statement hand-edited in the JSON, or a generator run that was
 # never committed, fails here rather than at three in the morning on a cron tick.
 #
 # It is a syntax and planning check, not a behaviour one. What each statement DOES is
-# design/v2/01-verify/run.sh's walk, and what the WAVE does is a real wave.
+# soma/scripts/verify/run.sh's walk, and what the WAVE does is a real wave.
 #
 # Kalam ships no migrations -- the schema is Soma's, and Kalam is granted a narrow role on it. The
 # path is relative because the repos sit beside each other in the workspace; override MIGRATIONS if

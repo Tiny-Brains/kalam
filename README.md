@@ -176,6 +176,7 @@ failure exercises are still open; lint or readyz alone must not be reported as a
 ## More
 
 - Local references: [wave generator](scripts/gen-kalam.py), [engine ABI](plugins/tb-ants/plugin.json), and [SQL check](scripts/check-sql.sh).
-- Competitor documentation is maintained as a separate mdBook; a published guide URL is not configured in this checkout.
+- Design docs: [`docs/design.md`](docs/design.md) — the wave, the lease, the finish, and drain.
+- [The competitor guide](https://github.com/Tiny-Brains/docs) — the reader-facing half: the rules, the model format, the adapter dialect, submitting, ranking and seasons. The platform section is the high-level design for someone new to the codebase.
 - Related repositories: [Soma](https://github.com/Tiny-Brains/soma), [Jodi](https://github.com/Tiny-Brains/jodi), [Axon](https://github.com/Tiny-Brains/axon), [Ants](https://github.com/Tiny-Brains/ants), [DevOps](https://github.com/Tiny-Brains/devops).
-- The platform README convention specifies Apache-2.0, but this repository does not yet contain a LICENSE file.
+- Apache-2.0: see [LICENSE](LICENSE).

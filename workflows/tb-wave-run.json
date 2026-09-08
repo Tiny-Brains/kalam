@@ -1,7 +1,7 @@
 {
   "workflow_id": "tb-wave-run",
   "name": "Kalam: one wave, turn by turn",
-  "description": "Claim up to K pending rows on this replica's engine digest, hold their models in the loader beside it, and play them turn-synchronously: observe -> one play call -> step. Each row is finished AS ITS MATCH ENDS, one per sweep from a queue (decision 33), with its replay under a key naming the attempt. Every statement is conditioned on the claim token, so a stale attempt updates nothing. It reads no rating and writes no rating, and its database role cannot reach one. On SIGTERM Orion stops claiming and lets the wave in hand finish inside cron.shutdown_timeout_secs. 03-kalam.md; the statements are 01-match-table.md §4.",
+  "description": "Claim up to K pending rows on this replica's engine digest, hold their models in the loader beside it, and play them turn-synchronously: observe -> one play call -> step. Each row is finished AS ITS MATCH ENDS, one per sweep from a queue (decision 33), with its replay under a key naming the attempt. Every statement is conditioned on the claim token, so a stale attempt updates nothing. It reads no rating and writes no rating, and its database role cannot reach one. On SIGTERM Orion stops claiming and lets the wave in hand finish inside cron.shutdown_timeout_secs. docs/design.md; the statements are soma/docs/schema.md §4.",
   "tags": [
     "pkg:kalam"
   ],
