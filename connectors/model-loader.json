@@ -2,11 +2,19 @@
   "id": "model-loader",
   "name": "model-loader",
   "connector_type": "http",
-  "tags": ["pkg:kalam"],
+  "tags": [
+    "pkg:kalam"
+  ],
   "config": {
     "type": "http",
-    "url": "env://MODEL_LOADER_URL",
-    "headers": { "content-type": "application/json", "user-agent": "kalam" },
-    "retry": { "max_retries": 0, "retry_delay_ms": 0 }
+    "url": "http://127.0.0.1:9090",
+    "headers": {
+      "content-type": "application/json",
+      "user-agent": "kalam"
+    },
+    "retry": {
+      "max_retries": 0,
+      "retry_delay_ms": 0
+    }
   }
 }

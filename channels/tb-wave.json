@@ -1,0 +1,26 @@
+{
+  "channel_id": "tb-wave",
+  "name": "tb-wave",
+  "tags": [
+    "pkg:kalam"
+  ],
+  "channel_type": "async",
+  "protocol": "cron",
+  "workflow_id": "tb-wave-run",
+  "transport_config": {
+    "schedule": "*/5 * * * * *",
+    "timezone": "UTC",
+    "misfire_policy": "skip",
+    "concurrency": {
+      "policy": "forbid",
+      "key": "wave"
+    }
+  },
+  "config": {
+    "timeout_ms": 2400000,
+    "tracing": {
+      "errors_only": true,
+      "task_details": true
+    }
+  }
+}

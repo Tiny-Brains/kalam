@@ -13,6 +13,15 @@
 #   ORION_ADMIN                admin API base (default http://127.0.0.1:8080/api/v1/admin)
 #   ORION_ADMIN_API_KEY        sent as a bearer token when admin_auth is enabled
 #   KALAM_ALLOW_PRIVATE_URLS   1 to set allow_private_urls on the database and loader connectors
+#   MODEL_LOADER_URL           the loader's address, substituted into the model-loader connector
+#
+# WHY THE LOADER'S URL IS SUBSTITUTED HERE and not written in the connector: Orion validates an
+# http connector's `url` as a URL, and refuses an `env://` reference with
+#   VALIDATION_ERROR: Connector URL must use http or https scheme, got 'env'
+# A storage connector's `endpoint` takes env:// happily, which is why kalam-blobs can and this
+# cannot. So the committed file carries the loopback default -- which is the deployed topology,
+# one loader beside every replica -- and a deployment that puts the loader elsewhere says so
+# through the environment, exactly as it does for the database.
 #
 # The loader is ALWAYS a private address -- it is loopback by design, one beside every replica --
 # so unlike Soma, where the flag is a local-development convenience for db:5432, here it is a
@@ -31,19 +40,36 @@ AUTH=""
 curl_admin() {
   if [ -n "$AUTH" ]; then curl -sS -H "$AUTH" "$@"; else curl -sS "$@"; fi
 }
-req() { curl_admin --fail-with-body "$@"; }
+# --fail-with-body prints the server's explanation on stdout, and every call site here redirects
+# stdout to /dev/null -- so a 400 used to surface as a bare `curl: (22) ... error: 400` with the
+# reason discarded. That cost an hour on a VALIDATION_ERROR that says exactly what is wrong. Keep
+# the body, on stderr, where the redirect cannot reach it.
+req() {
+  _out=$(mktemp)
+  if curl_admin --fail-with-body -o "$_out" "$@"; then
+    cat "$_out"; rm -f "$_out"
+  else
+    _rc=$?
+    echo "    !! admin API refused:" >&2; cat "$_out" >&2; echo >&2
+    rm -f "$_out"; return $_rc
+  fi
+}
 
 # jq where available, python3 otherwise -- the host has python3, the image has jq.
 if command -v jq > /dev/null 2>&1; then
   field() { jq -r ".$2" "$1"; }
   ids() { jq -r ".data[].$1"; }
   with_private_urls() { jq '.config.allow_private_urls = true' "$1"; }
+  with_url() { jq --arg u "$SUB_URL" \
+      '.config.url = $u | if $private == "1" then .config.allow_private_urls = true else . end' \
+      --arg private "$ALLOW_PRIVATE" "$1"; }
   plugin_body() { jq -n --slurpfile m "$1" --rawfile c "$2" \
       '{plugin_id: $m[0].name, manifest: $m[0], component: ($c | rtrimstr("\n")), tags: ["pkg:kalam"]}'; }
 else
   field() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$1" "$2"; }
   ids() { python3 -c 'import json,sys; [print(o[sys.argv[1]]) for o in json.load(sys.stdin)["data"]]' "$1"; }
   with_private_urls() { python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["config"]["allow_private_urls"]=True; print(json.dumps(d))' "$1"; }
+  with_url() { python3 -c 'import json,os,sys; d=json.load(open(sys.argv[1])); d["config"]["url"]=os.environ["SUB_URL"]; d["config"]["allow_private_urls"]=(os.environ.get("KALAM_ALLOW_PRIVATE_URLS")=="1"); print(json.dumps(d))' "$1"; }
   plugin_body() { python3 -c 'import json,sys; m=json.load(open(sys.argv[1])); print(json.dumps({"plugin_id": m["name"], "manifest": m, "component": open(sys.argv[2]).read().strip(), "tags": ["pkg:kalam"]}))' "$1" "$2"; }
 fi
 
@@ -56,6 +82,15 @@ for kind in channels workflows connectors plugins; do
     plugins)    key=plugin_id ;;
   esac
   for id in $(req "$ADMIN/$kind?tag=pkg:kalam&limit=500" | ids "$key"); do
+    # A plugin is ARCHIVED, not deleted, and it cannot be archived while an active workflow calls
+    # its functions -- which is why workflows are swept first. Without the archive the DELETE is a
+    # silent no-op and the re-create is a 409 that only shows up on the SECOND load of a package.
+    # (The first load of a fresh server works either way, so this is a bug that hides until the
+    # first redeploy.)
+    if [ "$kind" = plugins ]; then
+      curl_admin -X PATCH "$ADMIN/plugins/$id/status" -H 'Content-Type: application/json' \
+          -d '{"status":"archived"}' -o /dev/null || true
+    fi
     curl_admin -X DELETE "$ADMIN/$kind/$id" -o /dev/null || true
     echo "    $kind/$id"
   done
@@ -65,7 +100,21 @@ echo "==> connectors"
 for f in connectors/*.json; do
   id=$(field "$f" id)
   case "$id" in
-    kalam-db|model-loader)
+    model-loader)
+      SUB_URL="${MODEL_LOADER_URL:-http://127.0.0.1:9090}" \
+      KALAM_ALLOW_PRIVATE_URLS="$ALLOW_PRIVATE" \
+        with_url "$f" | req -X POST "$ADMIN/connectors" -H 'Content-Type: application/json' --data @- > /dev/null ;;
+    # The replay PUT goes through an ordinary http connector, because Orion carries no bytes:
+    # `storage_presign` and `storage_head` are its only storage task functions. Its base URL must
+    # be EXACTLY the storage endpoint, because the workflow reduces the presigned URL to a path by
+    # subtracting `[vars] blob_endpoint` from it -- so one value feeds both, from the environment.
+    kalam-blobs-put)
+      # No apostrophe in that message: inside ${VAR:?word} the shell still applies quote removal
+      # to `word`, so a lone ' opens a quote that never closes and the whole file fails to parse.
+      SUB_URL="${R2_ENDPOINT:?R2_ENDPOINT is required: the replay store endpoint}" \
+      KALAM_ALLOW_PRIVATE_URLS="$ALLOW_PRIVATE" \
+        with_url "$f" | req -X POST "$ADMIN/connectors" -H 'Content-Type: application/json' --data @- > /dev/null ;;
+    kalam-db)
       if [ "$ALLOW_PRIVATE" = "1" ]; then
         with_private_urls "$f" | req -X POST "$ADMIN/connectors" -H 'Content-Type: application/json' --data @- > /dev/null
       else

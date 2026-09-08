@@ -1,0 +1,19 @@
+{
+  "id": "kalam-blobs-put",
+  "name": "kalam-blobs-put",
+  "connector_type": "http",
+  "tags": [
+    "pkg:kalam"
+  ],
+  "config": {
+    "type": "http",
+    "url": "http://127.0.0.1:9000",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "retry": {
+      "max_retries": 2,
+      "retry_delay_ms": 250
+    }
+  }
+}

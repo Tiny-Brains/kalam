@@ -62,7 +62,11 @@ COPY docker-entrypoint.sh     /usr/local/bin/docker-entrypoint.sh
 # The orion config template is NOT baked in -- it is instance configuration and lives in the
 # deployment repo, mounted at ORION_CONFIG_TEMPLATE (see the compose file). The image is therefore
 # the same in every environment, which is what lets a replica be replaced rather than repaired.
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh /app/scripts/load-package.sh \
+# Orion's own state is a SQLite file, and SQLite does not create the directory it sits in: without
+# this the replica restart-loops on `unable to open database file` before it has done anything.
+# Ephemeral by design -- a replica shares no state and losing it costs at most the wave in hand.
+RUN mkdir -p /app/state \
+ && chmod +x /usr/local/bin/docker-entrypoint.sh /app/scripts/load-package.sh \
  && chown -R kalam:kalam /app
 
 USER kalam

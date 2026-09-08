@@ -5,3 +5,6 @@ target/
 
 # Local run artifacts
 .run/
+
+# gen-kalam.py is imported by debugging harnesses; its bytecode is not the package.
+__pycache__/

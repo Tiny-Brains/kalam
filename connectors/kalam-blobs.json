@@ -2,7 +2,9 @@
   "id": "kalam-blobs",
   "name": "kalam-blobs",
   "connector_type": "storage",
-  "tags": ["pkg:kalam"],
+  "tags": [
+    "pkg:kalam"
+  ],
   "config": {
     "type": "storage",
     "provider": "s3",
@@ -11,6 +13,11 @@
     "bucket": "env://R2_BUCKET",
     "access_key": "env://R2_ACCESS_KEY",
     "secret_key": "env://R2_SECRET_KEY",
-    "operations": { "presign_get": false, "presign_put": true, "head": false }
+    "operations": {
+      "presign_get": false,
+      "presign_put": true,
+      "head": false
+    },
+    "force_path_style": true
   }
 }
