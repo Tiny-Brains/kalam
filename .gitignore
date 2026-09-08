@@ -8,3 +8,8 @@ target/
 
 # gen-kalam.py is imported by debugging harnesses; its bytecode is not the package.
 __pycache__/
+
+# Detached plugin signatures -- devops/scripts/sign-plugins.sh writes them from whatever key
+# this machine holds. The COMPONENT is the committed artifact; the signature over it belongs to
+# whoever built that release (layer 07 §11).
+plugins/*/*.wasm.sig

@@ -63,14 +63,15 @@ if command -v jq > /dev/null 2>&1; then
   with_url() { jq --arg u "$SUB_URL" \
       '.config.url = $u | if $private == "1" then .config.allow_private_urls = true else . end' \
       --arg private "$ALLOW_PRIVATE" "$1"; }
-  plugin_body() { jq -n --slurpfile m "$1" --rawfile c "$2" \
-      '{plugin_id: $m[0].name, manifest: $m[0], component: ($c | rtrimstr("\n")), tags: ["pkg:kalam"]}'; }
+  plugin_body() { jq -n --slurpfile m "$1" --rawfile c "$2" --arg s "$3" \
+      '{plugin_id: $m[0].name, manifest: $m[0], component: ($c | rtrimstr("\n")), tags: ["pkg:kalam"]}
+       + (if $s == "" then {} else {signature: $s} end)'; }
 else
   field() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$1" "$2"; }
   ids() { python3 -c 'import json,sys; [print(o[sys.argv[1]]) for o in json.load(sys.stdin)["data"]]' "$1"; }
   with_private_urls() { python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["config"]["allow_private_urls"]=True; print(json.dumps(d))' "$1"; }
   with_url() { python3 -c 'import json,os,sys; d=json.load(open(sys.argv[1])); d["config"]["url"]=os.environ["SUB_URL"]; d["config"]["allow_private_urls"]=(os.environ.get("KALAM_ALLOW_PRIVATE_URLS")=="1"); print(json.dumps(d))' "$1"; }
-  plugin_body() { python3 -c 'import json,sys; m=json.load(open(sys.argv[1])); print(json.dumps({"plugin_id": m["name"], "manifest": m, "component": open(sys.argv[2]).read().strip(), "tags": ["pkg:kalam"]}))' "$1" "$2"; }
+  plugin_body() { python3 -c 'import json,sys; m=json.load(open(sys.argv[1])); b={"plugin_id": m["name"], "manifest": m, "component": open(sys.argv[2]).read().strip(), "tags": ["pkg:kalam"]}; s=sys.argv[3].strip(); s and b.update({"signature": s}); print(json.dumps(b))' "$1" "$2" "$3"; }
 fi
 
 echo "==> deleting existing pkg:kalam objects"
@@ -136,7 +137,14 @@ for f in plugins/*/plugin.json; do
   component=$(field "$f" component)
   b64file=$(mktemp)
   base64 < "$dir/$component" | tr -d '\n' > "$b64file"
-  plugin_body "$f" "$b64file" \
+  # The detached signature, if this machine made one. Orion verifies it over the DIGEST STRING --
+  # `sha256:<64 hex>`, the ASCII, not the bytes -- when `[plugins.trust] public_keys` is non-empty,
+  # both here at the upload and again on every node that loads the version. No `.sig` file means no
+  # field, which a node with keys refuses by name and a node without keys accepts.
+  sigfile="$dir/$component.sig"
+  sig=""
+  [ -r "$sigfile" ] && sig=$(tr -d '\n' < "$sigfile")
+  plugin_body "$f" "$b64file" "$sig" \
     | req -X POST "$ADMIN/plugins" -H 'Content-Type: application/json' --data @- > /dev/null
   rm -f "$b64file"
   req -X PATCH "$ADMIN/plugins/$id/status" -H 'Content-Type: application/json' \
