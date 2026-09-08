@@ -1826,6 +1826,18 @@
             "preset": {
               "var": "temp_data.hrow.preset"
             },
+            "map_id": {
+              "var": "temp_data.hres.r.map_id"
+            },
+            "map": {
+              "var": "temp_data.hres.r.map"
+            },
+            "seats": {
+              "var": "temp_data.hrefs.items"
+            },
+            "max_turns": {
+              "var": "metadata.vars.max_turns"
+            },
             "engine_digest": {
               "var": "metadata.vars.engine_digest"
             },

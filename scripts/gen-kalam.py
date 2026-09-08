@@ -719,6 +719,27 @@ TASKS = [
                 "attempt_token": var("data.token"),
                 "seed": var("temp_data.hrow.seed"),
                 "preset": var("temp_data.hrow.preset"),
+                # THE BOARD. A replay is self-sufficient or it is not viewable: `replay-decode`
+                # rebuilds the match from `map`, so a replay stays viewable when the preset table
+                # has been re-tuned or the catalogue has moved on. The engine emits it on the
+                # finish result of a match that has ENDED, which is exactly the row being written
+                # here, so it costs no state carried across turns.
+                #
+                # Until this existed the envelope had `seed` and `preset` and no initial state at
+                # all, while `replay-decode` required a `state0` nothing ever wrote -- so no replay
+                # the platform had stored could be decoded by the function that decodes replays.
+                "map_id": var("temp_data.hres.r.map_id"),
+                "map": var("temp_data.hres.r.map"),
+                # WHO SAT WHERE, by hash. Not identity -- a hash is not a competitor -- but enough
+                # that a replay can be RE-RUN and not merely watched: `tinybrains conform` rebuilds
+                # the match from this envelope alone and diffs the result against it, which is the
+                # only mechanism that keeps the local runner and this workflow telling the same
+                # story about the same seeds. `match_seats` already holds these and a replay is
+                # competitor-visible, so nothing here is newly disclosed.
+                "seats": var("temp_data.hrefs.items"),
+                # The seed fixes food respawn and the map fixes the board; re-simulation needs the
+                # turn limit too, and it is a var rather than a column.
+                "max_turns": vars_("max_turns"),
                 "engine_digest": vars_("engine_digest"),
                 "evaluator_digest": var("temp_data.play.evaluator_digest"),
                 "dialect_version": var("temp_data.play.dialect_version"),
