@@ -123,7 +123,11 @@ for f in plugins/*/plugin.json; do
   # `sha256:<64 hex>`, the ASCII, not the bytes -- when `[plugins.trust] public_keys` is non-empty.
   # No `.sig` file means no field, which a node with keys refuses by name and a node without accepts.
   sig=""
-  [ -r "$dir/$component.sig" ] && sig=$(tr -d '\n' < "$dir/$component.sig")
+  # PLUGIN_SIG_DIR: a signature belongs to whoever holds the trust key, not to the package, so a
+  # package that ships as an immutable image cannot carry one. Unset, it falls back to beside the
+  # component, which is where a host-side run of devops' sign-plugins.sh still puts it.
+  sigfile="${PLUGIN_SIG_DIR:-$dir}/$component.sig"
+  [ -r "$sigfile" ] && sig=$(tr -d '\n' < "$sigfile")
   plugin_body "$f" "$b64file" "$sig" | post plugins
   rm -f "$b64file"
   status plugins "$id" active
