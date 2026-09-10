@@ -1,4 +1,0 @@
-The game engine cartridge (`tb.ants`) is installed here as a signed Orion plugin, built by P3 from
-`ants/docs/cartridge.md. Until it exists this directory is empty and the package loads without it --
-which is the whole point of the split: the wave workflow is Kalam's, the game is a plugin, and a
-second cartridge is a second plugin and no schema change.

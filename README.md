@@ -90,22 +90,22 @@ Run commands from this repository's root.
 Point ORION_ADMIN at the replica, enable private connections for its loopback sidecar, and load:
 
 ```sh
-KALAM_ALLOW_PRIVATE_URLS=1 ./scripts/load-package.sh
+KALAM_ALLOW_PRIVATE_URLS=1 R2_ENDPOINT=... ./scripts/load-package.sh
 ```
 
 Validate the definitions independently of the running wave:
 
 ```sh
-orion-server --version
 orion-server lint . --deny-warnings
 ```
 
-The SQL check prepares nine shipped statements and checks execution-column grants, including denial
-of rated_at updates. It recreates `kalam_sqlcheck`; use a development DB_CONTAINER and DB_USER.
-Set MIGRATIONS to the path of Soma's migrations when the two repositories are not adjacent.
-There is no standalone wave test suite: SQL preparation does not exercise leases or turn execution.
-Package lint does not check Ants inputs from the vendored JSON manifest; use --plugin-dir with
-a checkout containing Ants' plugin.toml for that check, or validate against the active plugin at load.
+The SQL check prepares the nine shipped statements and checks execution-column grants, including
+denial of rated_at updates. It recreates and drops `kalam_sqlcheck`; use a development DB_CONTAINER
+and DB_USER. Set MIGRATIONS to the path of Soma's migrations when the two repositories are not
+adjacent. There is no standalone wave test suite: SQL preparation does not exercise leases or turn
+execution. Package lint does not check Ants inputs from the vendored JSON manifest; use --plugin-dir
+with a checkout containing Ants' plugin.toml for that check, or validate against the active plugin
+at load.
 
 Edit scripts/gen-kalam.py and regenerate with `python3 scripts/gen-kalam.py`; commit the workflow
 and channel output. To update the engine, pass a cartridge checkout path to scripts/vendor-engine.sh.
@@ -130,7 +130,8 @@ package's cron, plugin, or authentication definitions and can report misleading 
 | engine_digest | Identity used to filter claims | A mismatch can leave a healthy replica idle |
 | replay_prefix, blob_endpoint | Attempt-object naming and signed URL handling | Incorrect paths or endpoint subtraction break uploads |
 
-The final five rows are Orion `[vars]`. The [replica template](https://github.com/Tiny-Brains/devops/blob/main/orion/kalam.toml.tmpl)
+The final five rows are Orion `[vars]`, and the wave halts at its `vars` task if any is missing. The
+[replica template](https://github.com/Tiny-Brains/devops/blob/main/compose/orion/kalam.toml.tmpl)
 contains deployment values; capacity and timing are tuning choices, not game-independent constants.
 Derive engine_digest from the vendored bytes and align it with games.active_engine_digest and
 season identity. blob_endpoint must match the replay endpoint used to construct signed paths.
@@ -165,13 +166,16 @@ scripts/load-package.sh      replacement of objects tagged pkg:kalam
 - **Play calls are never retried by the connector.** model-loader.json sets max_retries to zero to avoid duplicate turn execution.
 - **Engine identity controls claims.** A replica must only play rows matching its loaded component digest.
 - **Game state remains opaque to workflows.** This boundary is a review requirement; cartridge functions own its interpretation.
+- **The generated files are the package.** A change to scripts/gen-kalam.py that is not regenerated and committed ships a stale workflow, and nothing at runtime notices.
 
 ## Status
 
-**8 September 2026.** The wave, replay upload, claim recovery, and vendored engine are implemented.
-Orion 1.7.0 package lint passes; check-sql.sh checks the database contract; a running DevOps stack is required to validate actual
-play, drain, and recovery. Component signing, mixed-engine rollout verification, and remaining
-failure exercises are still open; lint or readyz alone must not be reported as a working match loop.
+**10 September 2026.** The wave, replay upload, claim recovery, drain and the vendored engine are
+implemented and have run against real rows in a real replica. Orion 1.7.0 package lint passes and
+check-sql.sh checks the database contract; a running DevOps stack is still required to validate
+play, drain and recovery. Open: mixed-engine rollout verification, and the memory branch of the
+residency barrier, which no deployed model has yet been large enough to take. Lint or readyz alone
+must not be reported as a working match loop.
 
 ## More
 

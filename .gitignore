@@ -1,15 +1,7 @@
-# Rust build output. Nothing here builds today, but the game engine arrives in
-# plugins/ as a cartridge compiled to wasm (P3), and its build tree is not the
-# artifact -- the committed .wasm is, for the same reason as in jodi/.
-target/
-
-# Local run artifacts
-.run/
-
-# gen-kalam.py is imported by debugging harnesses; its bytecode is not the package.
+# gen-kalam.py is importable, and its bytecode is not the package.
 __pycache__/
 
-# Detached plugin signatures -- devops/scripts/sign-plugins.sh writes them from whatever key
-# this machine holds. The COMPONENT is the committed artifact; the signature over it belongs to
-# whoever built that release (devops/docs/deployment.md §11).
+# Detached plugin signatures -- devops/scripts/setup/sign-plugins.sh writes them from whatever key this
+# machine holds. The COMPONENT is the committed artifact; the signature over it belongs to whoever
+# built that release (devops/docs/deployment.md §11).
 plugins/*/*.wasm.sig
