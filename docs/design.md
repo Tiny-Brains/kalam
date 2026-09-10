@@ -168,8 +168,23 @@ after that. A ref is:
 ```jsonc
 { "m": 3, "seat": 1,
   "weights_hash": "sha256:…", "adapter_hash": "sha256:…",
-  "strikes": 0, "forfeited": false }
+  "strikes": 0, "forfeited": false,
+  "infer_us_total": 78360, "infer_us_max": 1001, "infer_turns": 150 }
 ```
+
+The three `infer_*` counters are the seat's **cost**, accumulated exactly as `strikes` is and for the
+same reason — a fixed task list has nowhere else to keep a per-seat number across turns. Each turn
+adds the loader's `infer_us` for that row: its share of its own group's inference, *not* its
+`elapsed_ms`, which runs from a row entering the call to leaving it and so reports roughly the whole
+call for every row alike. **All three are seeded at `0` rather than left absent**, because
+`{"+": [null, x]}` on the first write is the silent-null failure this document keeps warning about.
+A forfeited seat is absent from the next turn's play call, so its counters freeze at the last turn it
+was played — which is why `infer_turns` is carried instead of reusing `matches.turns` as a divisor.
+
+They land in two places at finish: `match_seats` (three columns, granted to the Kalam role) and the
+replay envelope's `seats`, which is `hrefs.items` and therefore gets them for nothing. `tinybrains
+conform` compares an explicit field allowlist that excludes `seats`, so carrying a
+non-reproducible number in a replay cannot make a deterministic one fail to conform.
 
 It is passed to `observe`, echoed onto every view, copied onto the play row, echoed back by the
 loader on the reply, and rebuilt from that reply into the next turn's refs. **The engine and the

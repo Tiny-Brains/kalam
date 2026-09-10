@@ -58,7 +58,8 @@ Two consequences shape most of the workflow:
   filter-by-a-root-value in the workflow is a reduce whose accumulator carries that value beside the
   list being built. `sift()` is the one place that is written; unwrap its `.items`.
 - **Per-seat state rides in the `refs`** — a flat list, each entry carrying its own `m` and `seat`
-  plus `strikes` and `forfeited`. It goes out through `observe`, onto the play row, back on the
+  plus `strikes`, `forfeited`, and the three `infer_*` cost counters (seeded at `0`: `{"+": [null,
+  x]}` on a first write is silent). It goes out through `observe`, onto the play row, back on the
   loader's echoed `ref`, and into the next turn. A fixed task list has no other way to accumulate
   anything per seat, and neither the engine nor the loader looks inside one. A *nested*
   `refs[m][seat]` shifts silently the moment one match in the wave ends.

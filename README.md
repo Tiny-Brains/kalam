@@ -170,6 +170,16 @@ scripts/load-package.sh      replacement of objects tagged pkg:kalam
 
 ## Status
 
+**Per-seat cost, 10 September 2026.** The wave accumulates the loader's `infer_us` per seat across
+the match — three counters on the `refs` element, exactly where `strikes` lives and for the same
+reason — and writes them to `match_seats` at finish. The replay envelope's `seats` gets them for
+nothing, since it is `hrefs.items`. Verified end to end on the running stack, and a
+platform-written replay still conforms IDENTICAL against a local re-play over all 150 turns.
+
+**Engine re-vendored, 10 September 2026.** The committed `tb-ants.wasm` was `sha256:254549b4` while
+ants shipped `sha256:1555f081`, so `devops/scripts/check/configs.sh` was failing on the committed
+tree and local play and the fleet were running different engines. Re-vendored and re-signed.
+
 **10 September 2026.** The wave, replay upload, claim recovery, drain and the vendored engine are
 implemented and have run against real rows in a real replica. Orion 1.7.0 package lint passes and
 check-sql.sh checks the database contract; a running DevOps stack is still required to validate

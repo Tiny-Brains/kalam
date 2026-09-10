@@ -295,9 +295,13 @@ WITH m AS (
  RETURNING id
 )
 UPDATE match_seats s
-   SET rank = v.rank, score = v.score, strikes = v.strikes
+   SET rank = v.rank, score = v.score, strikes = v.strikes,
+       infer_us_total = v.infer_us_total, infer_us_max = v.infer_us_max,
+       infer_turns = v.infer_turns
   FROM m,
-       jsonb_to_recordset(($3)::jsonb) AS v (seat smallint, rank smallint, score int, strikes smallint)
+       jsonb_to_recordset(($3)::jsonb) AS v (seat smallint, rank smallint, score int,
+                                             strikes smallint, infer_us_total bigint,
+                                             infer_us_max int, infer_turns int)
  WHERE s.match_id = m.id AND s.seat = v.seat
 """
 
@@ -332,6 +336,15 @@ HEAD = {"head": var("temp_data.head")}
 # One strike per row the loader could not play. Bound to a name because the forfeit test needs the
 # same expression, and the two must not drift.
 NEXT_STRIKES = {"+": [var("current.ref.strikes"), {"if": [var("current.action"), 0, 1]}]}
+
+# What the row's model COST this turn: its share of its own group's inference, from the loader. Not
+# `elapsed_ms`, which runs from a row entering the call to leaving it and so reports roughly the
+# whole call for every row. Defaulted because an error row carries no figure worth adding.
+THIS_INFER_US = {"??": [var("current.infer_us"), 0]}
+NEXT_INFER_TOTAL = {"+": [var("current.ref.infer_us_total"), THIS_INFER_US]}
+NEXT_INFER_MAX = {"if": [{">": [THIS_INFER_US, var("current.ref.infer_us_max")]},
+                         THIS_INFER_US, var("current.ref.infer_us_max")]}
+NEXT_INFER_TURNS = {"+": [var("current.ref.infer_turns"), 1]}
 
 TASKS = [
     # ------------------------------------------------------------------ turn 0: claim
@@ -443,7 +456,11 @@ TASKS = [
                                {"m": var("m"), "seat": var("seat"),
                                 "weights_hash": var("weights_hash"),
                                 "adapter_hash": var("adapter_hash"),
-                                "strikes": 0, "forfeited": False}]}),
+                                "strikes": 0, "forfeited": False,
+                                # Seeded at 0, not left absent: the accumulators below add to these
+                                # every turn, and `{"+": [null, x]}` on the first write is exactly
+                                # the silent-null class of bug this file keeps warning about.
+                                "infer_us_total": 0, "infer_us_max": 0, "infer_turns": 0}]}),
         ("data.models", var("temp_data.mods")),
         ("data.n_running", {"length": [var("data.rows")]}),
         ("data.pending", []),        # ended, not yet finished
@@ -516,6 +533,12 @@ TASKS = [
                 "strikes": NEXT_STRIKES,
                 "forfeited": {"or": [var("current.ref.forfeited"),
                                      {">=": [NEXT_STRIKES, var("accumulator.c")]}]},
+                # A forfeited seat is absent from the next turn's play call, so these freeze at the
+                # last turn it was actually played -- which is why `infer_turns` is carried rather
+                # than matches.turns being reused as the divisor.
+                "infer_us_total": NEXT_INFER_TOTAL,
+                "infer_us_max": NEXT_INFER_MAX,
+                "infer_turns": NEXT_INFER_TURNS,
             })),
         ("temp_data.next_refs", var("temp_data.nr.items")),
         # A forfeited seat is absent from the reply, so rebuilding the refs from the reply alone
@@ -595,6 +618,9 @@ TASKS = [
                                 {"if": [var("current.forfeited"), var("accumulator.n"), 0]}]},
                  "score": {"val": ["accumulator", "r", "scores", {"val": ["current", "seat"]}]},
                  "strikes": var("current.strikes"),
+                 "infer_us_total": var("current.infer_us_total"),
+                 "infer_us_max": var("current.infer_us_max"),
+                 "infer_turns": var("current.infer_turns"),
              }]]}},
             {"r": var("temp_data.hres.r"), "n": var("temp_data.hrow.seat_count"), "items": []}]}),
         # The key names the ATTEMPT, so a stale attempt's blob is an orphan under its own key rather
