@@ -108,7 +108,7 @@ with a checkout containing Ants' plugin.toml for that check, or validate against
 at load.
 
 Edit scripts/gen-kalam.py and regenerate with `python3 scripts/gen-kalam.py`; commit the workflow
-and channel output. To update the engine, pass a cartridge checkout path to scripts/vendor-engine.sh.
+and channel output. To update the engine, move ANTS_REF: the component comes from the cartridge's own artifact image, so this repository keeps no copy of it.
 That script copies committed artifacts and prints their digest; it does not compile Ants.
 
 Use the pinned Orion 1.7.0 toolchain for these checks. Older binaries do not understand this
@@ -154,7 +154,6 @@ connectors/kalam-blobs-put.json replay upload connection
 plugins/tb-ants/             vendored component and manifests
 scripts/gen-kalam.py         readable SQL and workflow generator
 scripts/check-sql.sh         SQL preparation and grant assertions
-scripts/vendor-engine.sh     artifact copying and digest calculation
 scripts/load-package.sh      replacement of objects tagged pkg:kalam
 ```
 
@@ -169,6 +168,26 @@ scripts/load-package.sh      replacement of objects tagged pkg:kalam
 - **The generated files are the package.** A change to scripts/gen-kalam.py that is not regenerated and committed ships a stale workflow, and nothing at runtime notices.
 
 ## Status
+
+**10 September 2026 — the package ships as an image, and the engine is no longer vendored.**
+`channels/`, `workflows/` and `plugins/` are gitignored; `Dockerfile` builds the package and devops
+copies it into a volume, which both the loader and every replica mount where they used to mount this
+checkout. `connectors/` is the authored part and is copied through. Both generated declarations are
+byte-identical to the ones that were committed.
+
+**`scripts/vendor-engine.sh` is deleted, and with it the drift it made possible.** The component
+used to be copied into `plugins/tb-ants/` and committed, so two copies of one engine existed and
+nothing errored when they diverged — the ladder played a component ants does not ship, with a viewer
+built against the other. The image now takes the component straight from the cartridge's own
+artifact image, named by `ANTS_REF`, so there is one copy and the two cannot disagree.
+
+**The engine digest moved from `sha256:f17b51b6…` to `sha256:0807b641…`**, declared as a *patch*
+rather than a release: `ants`' `cartridge.json` and `reference/observations.json` are byte-identical
+across the change, so no rule moved and the live season kept its ratings and took the new digest.
+Verified on the running stack — `games.active_engine_digest`, the live season, and both replicas'
+`[vars] engine_digest` all read the same value, no channel quarantined. The loader also registers
+the engine's own 10-observation reference set now, rather than axon's single worst-case fixture
+standing in for it.
 
 **Per-seat cost, 10 September 2026.** The wave accumulates the loader's `infer_us` per seat across
 the match — three counters on the `refs` element, exactly where `strikes` lives and for the same

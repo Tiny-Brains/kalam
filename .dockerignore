@@ -1,0 +1,10 @@
+# The generated files this image produces for itself, and the engine it takes from the cartridge's
+# own image. Copying either in would let a stale local copy shadow the one this Dockerfile makes --
+# which for the engine is the drift that made the ladder play a component ants does not ship.
+channels/
+workflows/
+plugins/
+
+.git/
+.run/
+__pycache__/

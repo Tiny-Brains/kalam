@@ -25,13 +25,13 @@ owns inference. The packages coordinate through Postgres and never call each oth
 ## Commands
 
 ```sh
-python3 scripts/gen-kalam.py               # regenerate the workflow + channel; commit the output
+python3 scripts/gen-kalam.py               # regenerate the workflow + channel (local; not committed)
 ./scripts/check-sql.sh                     # PREPARE all 9 shipped statements + assert the role's grants
 KALAM_ALLOW_PRIVATE_URLS=1 R2_ENDPOINT=http://minio:9000 ./scripts/load-package.sh
-./scripts/vendor-engine.sh ../ants         # re-vendor the engine; see the warning below
+docker build -t tinybrains/kalam:dev .     # the artifact image -- the package that actually ships
 
 # lint needs the PINNED 1.7.0 binary. `orion-server` on the host is often older and reports
-# misleading schema errors; devops mounts ../kalam read-only into every replica, so:
+# misleading schema errors; every replica mounts the package volume, so:
 docker exec tinybrains-kalam-1-1 orion-server lint /pkg/kalam --deny-warnings
 ```
 
@@ -93,13 +93,18 @@ five here is a change there.
 
 ## What breaks if you forget it
 
-- **A generator run that is not committed ships a stale package**, and nothing at runtime notices.
-  `check-sql.sh` reads the *shipped* JSON, so it is the guard.
-- **`engine_digest` must equal the vendored component's sha256 and `games.active_engine_digest`.**
-  The claim filters on it, so a mismatch is not an error anywhere — the replica claims nothing, for
-  ever, and the queue grows. `scripts/vendor-engine.sh` **rewrites the pinned component**: running it
-  is an engine cutover (`devops/scripts/deploy/declare-engine.sh`), not a cleanup step. Re-sign with
-  `devops/scripts/setup/sign-plugins.sh` afterwards or the node comes up `degraded`.
+- **A generator run that never reached the image ships a stale package**, and nothing at runtime
+  notices. `check-sql.sh` reads the JSON on disk; the image regenerates it, so the two agree only if
+  you rebuild. After editing anything here: `docker compose build kalam-artifacts && docker compose
+  run --rm --no-deps kalam-artifacts` — a package volume holds the package's own scripts too, so a
+  stale volume fails like a bug in the change you just made.
+- **`engine_digest` must equal the component's sha256 and `games.active_engine_digest`.** The claim
+  filters on it, so a mismatch is not an error anywhere — the replica claims nothing, for ever, and
+  the queue grows. **This repo no longer keeps its own copy of the component**: `Dockerfile` takes it
+  from the cartridge's artifact image via `ANTS_REF`, so ants and kalam cannot disagree by
+  construction — which they once did, from an edit that changed no behaviour at all. Moving
+  `ANTS_REF` is an engine cutover (`devops/scripts/deploy/declare-engine.sh`), not a cleanup step.
+  Re-sign with `devops/scripts/setup/sign-plugins.sh` afterwards or the node comes up `degraded`.
 - **`strike_ceiling` must equal Jodi's `forfeit_strikes`** — Kalam applies it, Jodi's count clock
   reads its consequences off the row. `devops/scripts/check/configs.sh` asserts it.
 - **A missing `[vars]` value is silent and catastrophic**: `{">=": [1, null]}` is true here, so an

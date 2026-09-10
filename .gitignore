@@ -1,7 +1,27 @@
 # gen-kalam.py is importable, and its bytecode is not the package.
 __pycache__/
 
-# Detached plugin signatures -- devops/scripts/setup/sign-plugins.sh writes them from whatever key this
-# machine holds. The COMPONENT is the committed artifact; the signature over it belongs to whoever
-# built that release (devops/docs/deployment.md §11).
+# THE BUILD OUTPUT IS NOT COMMITTED. It is carried in the artifact image `Dockerfile` builds --
+# `tinybrains/kalam:dev` locally, `ghcr.io/tiny-brains/kalam:<tag>` published -- and devops copies
+# /artifacts into a volume, mounting that where it used to mount this checkout. `connectors/` is the
+# authored part and is committed.
+#
+# `scripts/gen-kalam.py` still writes channels/ and workflows/ locally, and is still what you run
+# while working here. It is just no longer what ships.
+channels/
+workflows/
+
+# THE ENGINE IS NOT OURS TO KEEP A COPY OF. `plugins/tb-ants/` used to hold a vendored copy of the
+# cartridge -- component, plugin.json and cartridge.json, copied out of ants by a script -- so two
+# committed copies of one component existed and could drift. When they did NOTHING ERRORED: the
+# ladder played a component ants does not ship, with a viewer built against the other, and it
+# happened once from an edit that changed no behaviour at all.
+#
+# `Dockerfile` now takes the component straight from the cartridge's own artifact image (`ANTS_REF`),
+# so there is one copy and the two cannot disagree by construction.
+plugins/
+
+# Detached plugin signatures. A signature belongs to whoever holds the trust key, not to this
+# package -- load-package.sh reads PLUGIN_SIG_DIR, and devops keeps them under its own keys/. This
+# pattern stays only so a host-side signing run cannot leave one behind here.
 plugins/*/*.wasm.sig
