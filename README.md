@@ -169,6 +169,14 @@ scripts/load-package.sh      replacement of objects tagged pkg:kalam
 
 ## Status
 
+**11 September 2026 — the strike ceiling survives the first turn.** The change below put
+`strike_ceiling` on the turn-0 refs, but `acts` rebuilds the refs every turn and did not carry it:
+from turn 1 the forfeit test read a null ceiling, `{">=": [n, null]}` is true, every seat forfeited,
+and on turn 2 an empty `/play` reached `step` as `BAD_ACTION: 0 actions for N live seats`. Every
+wave on a fresh stack died that way, and the rows it had claimed sat `running` until their leases
+lapsed. The rebuilt ref carries the ceiling now; waves play to `lone_survivor`, `rank_stabilized`
+and `idle_food`, and fold.
+
 **10 September 2026 — the strike ceiling comes off the match row.** `matches.strike_ceiling` is
 stamped by pair from the season's rules and rides the refs to every seat, so the wave that applies
 it and the clock that judges its result read one value from one place. Kalam's own

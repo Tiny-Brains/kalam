@@ -551,6 +551,10 @@ TASKS = [
                 "m": var("current.ref.m"), "seat": var("current.ref.seat"),
                 "weights_hash": var("current.ref.weights_hash"),
                 "adapter_hash": var("current.ref.adapter_hash"),
+                # Carried forward, or it exists on turn 0 only: the next turn's forfeit test reads a
+                # null ceiling, `{">=": [n, null]}` is TRUE, every seat forfeits on turn 1, and on
+                # turn 2 an empty /play reaches `step` as "0 actions for N live seats".
+                "strike_ceiling": var("current.ref.strike_ceiling"),
                 "strikes": NEXT_STRIKES,
                 "forfeited": {"or": [var("current.ref.forfeited"),
                                      {">=": [NEXT_STRIKES,
