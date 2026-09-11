@@ -158,7 +158,7 @@ WITH first AS MATERIALIZED (
     SELECT m.id, m.preset
       FROM matches m
      WHERE m.status = 'pending' AND m.engine_digest = ($1)::text
-     ORDER BY (m.trial_model_id IS NOT NULL) DESC,
+     ORDER BY (m.trial_version_id IS NOT NULL) DESC,
               EXISTS (SELECT 1 FROM match_seats s
                        WHERE s.match_id = m.id
                          AND s.weights_hash = ANY (($2)::text[])) DESC,
@@ -174,7 +174,7 @@ WITH first AS MATERIALIZED (
             OR EXISTS (SELECT 1 FROM match_seats a
                          JOIN match_seats b ON b.weights_hash = a.weights_hash
                         WHERE a.match_id = f.id AND b.match_id = m.id))
-     ORDER BY (m.id = f.id) DESC, (m.trial_model_id IS NOT NULL) DESC, m.created_at, m.id
+     ORDER BY (m.id = f.id) DESC, (m.trial_version_id IS NOT NULL) DESC, m.created_at, m.id
      LIMIT ($3)::int
        FOR UPDATE OF m SKIP LOCKED
 )
@@ -244,16 +244,25 @@ UPDATE matches SET status = 'running'
 # repeated onto every seat because the refs are a FLAT list the engine matches on (m, seat).
 K_WAVE = """
 WITH w AS (
-    SELECT m.id, m.seed, m.preset, m.seat_count, m.trial_model_id,
+    SELECT m.id, m.seed, m.preset, m.seat_count, m.trial_version_id, m.strike_ceiling,
            (row_number() OVER (ORDER BY m.id) - 1)::int AS m
       FROM matches m
      WHERE m.claim_token = ($1)::uuid AND m.status = 'running'
 )
 SELECT json_build_object(
+         -- `trial_model_id` and `model_id` are the WIRE KEYS the run and the replay envelope use;
+         -- the columns behind them are named for versions now. Renaming a column is a schema
+         -- change, renaming these would be a protocol change.
          'm', w.m, 'id', w.id, 'seed', w.seed, 'preset', w.preset,
-         'seat_count', w.seat_count, 'trial_model_id', w.trial_model_id,
+         'seat_count', w.seat_count, 'trial_model_id', w.trial_version_id,
+         -- THE RULE THIS MATCH IS PLAYED BY, off the row pair stamped it on. Kalam keeps no copy of
+         -- this number in its own config any more: the wave and the clock that judges its result
+         -- now read one value from one place, instead of two [vars] in two repositories that a
+         -- deployment check had to assert equal.
+         'strike_ceiling', w.strike_ceiling,
          'seats', (SELECT json_agg(json_build_object(
-                      'm', w.m, 'seat', s.seat, 'model_id', s.model_id,
+                      'm', w.m, 'seat', s.seat, 'model_id', s.version_id,
+                      'strike_ceiling', w.strike_ceiling,
                       'weights_hash', s.weights_hash, 'adapter_hash', s.adapter_hash)
                     ORDER BY s.seat)
                      FROM match_seats s WHERE s.match_id = w.id)
@@ -355,9 +364,14 @@ TASKS = [
         ("data.opened_at", {"now": []}),
     ), cond=TURN0),
 
-    # A MISSING [vars] VALUE IS SILENT AND CATASTROPHIC: `{">=": [1, null]}` is true here, so an
-    # unresolved `strike_ceiling` forfeits every seat on turn 0 and the wave dies two turns later
-    # at `step`, naming neither the variable nor the cause. So: checked once, loudly, up front.
+    # A MISSING [vars] VALUE IS SILENT AND CATASTROPHIC: `{">=": [1, null]}` is true, so a
+    # comparison against an unresolved ceiling passes and the wave dies two turns later at `step`,
+    # naming neither the variable nor the cause. So: checked once, loudly, up front.
+    #
+    # `strike_ceiling` is deliberately NOT in this list any more. It is pinned on the match row by
+    # pair and read from there, so a replica cannot be configured with a ceiling that disagrees with
+    # the clock that judges the result -- the failure this guard existed to make loud is now one the
+    # schema's NOT NULL makes impossible.
     task("vars", "Halt unless this replica is configured", halt_unless({"and": [
         {"!=": [vars_("engine_digest"), None]},
         {">": [vars_("wave_k"), 0]},
@@ -366,7 +380,6 @@ TASKS = [
         {">": [vars_("turn_ms"), 0]},
         {">": [vars_("max_turns"), 0]},
         {">": [vars_("budget_ops"), 0]},
-        {">": [vars_("strike_ceiling"), 0]},
         {">": [vars_("refusal_ceiling"), 0]},
         {"!=": [vars_("replay_prefix"), None]},
         {"!=": [vars_("blob_endpoint"), None]},
@@ -456,6 +469,11 @@ TASKS = [
                                {"m": var("m"), "seat": var("seat"),
                                 "weights_hash": var("weights_hash"),
                                 "adapter_hash": var("adapter_hash"),
+                                # The ceiling rides WITH the seat it bounds, exactly as the strike
+                                # count does, and for the same reason: the sift below reads it in
+                                # ELEMENT scope, where a [vars] value is null -- and `{">=": [1,
+                                # null]}` is TRUE, which forfeits every seat on turn 0.
+                                "strike_ceiling": var("strike_ceiling"),
                                 "strikes": 0, "forfeited": False,
                                 # Seeded at 0, not left absent: the accumulators below add to these
                                 # every turn, and `{"+": [null, x]}` on the first write is exactly
@@ -525,14 +543,18 @@ TASKS = [
         # The strikes come out of the same walk, because the reply is the only place a row's error
         # and the identity of its seat are in the same object. Counted CUMULATIVELY: five missed
         # clocks in a match, not five in a row -- the reading a competitor cannot game.
+        # The seed used to carry `strike_ceiling` in from [vars], because a root var read inside a
+        # sift body is null. The value is now on the ref, which IS element scope, so the seed has
+        # nothing left to carry.
         ("temp_data.nr", sift(
-            var("temp_data.play.rows"), {"c": vars_("strike_ceiling")}, element={
+            var("temp_data.play.rows"), {}, element={
                 "m": var("current.ref.m"), "seat": var("current.ref.seat"),
                 "weights_hash": var("current.ref.weights_hash"),
                 "adapter_hash": var("current.ref.adapter_hash"),
                 "strikes": NEXT_STRIKES,
                 "forfeited": {"or": [var("current.ref.forfeited"),
-                                     {">=": [NEXT_STRIKES, var("accumulator.c")]}]},
+                                     {">=": [NEXT_STRIKES,
+                                             var("current.ref.strike_ceiling")]}]},
                 # A forfeited seat is absent from the next turn's play call, so these freeze at the
                 # last turn it was actually played -- which is why `infer_turns` is carried rather
                 # than matches.turns being reused as the divisor.
@@ -660,6 +682,11 @@ TASKS = [
             # The seed fixes food respawn and the map fixes the board; re-simulation needs the turn
             # limit too, and it is a var rather than a column.
             "max_turns": vars_("max_turns"),
+            # The ceiling this match was played under, at the TOP LEVEL and not only on the seats:
+            # `tinybrains conform` re-simulates from the envelope and reads no seat, so a ceiling
+            # carried only per seat would let it replay every match at its own default. Replays
+            # would conform cleanly until one of them had a forfeit.
+            "strike_ceiling": var("temp_data.hrow.strike_ceiling"),
             "engine_digest": vars_("engine_digest"),
             "evaluator_digest": var("temp_data.play.evaluator_digest"),
             "dialect_version": var("temp_data.play.dialect_version"),

@@ -169,6 +169,17 @@ scripts/load-package.sh      replacement of objects tagged pkg:kalam
 
 ## Status
 
+**10 September 2026 — the strike ceiling comes off the match row.** `matches.strike_ceiling` is
+stamped by pair from the season's rules and rides the refs to every seat, so the wave that applies
+it and the clock that judges its result read one value from one place. Kalam's own
+`[vars] strike_ceiling` is deleted, and with it `configs.sh`'s equality assertion: the documented
+cross-repo footgun is gone because Kalam stops keeping a second copy, not because Jodi stopped
+keeping the first. The replay envelope carries it too, so `tinybrains conform` replays a match at
+the ceiling it was played under.
+
+Nothing else changed. Kalam still never joins the roster, and it never learns that
+`match_seats.version_id` names a version rather than an entry.
+
 **10 September 2026 — the package ships as an image, and the engine is no longer vendored.**
 `channels/`, `workflows/` and `plugins/` are gitignored; `Dockerfile` builds the package and devops
 copies it into a volume, which both the loader and every replica mount where they used to mount this
