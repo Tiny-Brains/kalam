@@ -96,8 +96,20 @@ def task(tid: str, name: str, fn: dict, cond=None, terminal: bool = False,
 
 
 def mapping(*pairs) -> dict:
-    """A `map` task. Mappings are applied IN ORDER and later ones see earlier ones."""
-    return {"name": "map", "input": {"mappings": [{"path": p, "logic": l} for p, l in pairs]}}
+    """A `map` task. Mappings are applied IN ORDER and later ones see earlier ones.
+
+    A pair whose logic is `None` means CLEAR THIS SLOT, and it is emitted as `False`, not as JSON
+    null. dataflow-rs SKIPS a mapping whose logic evaluates to null -- `map.rs`:
+
+        if matches!(transformed_value, OwnedDataValue::Null) { ... continue; }
+
+    -- so `{"logic": null}` writes nothing at all and the slot keeps the PREVIOUS sweep's value.
+    That is the opposite of what a clear is for, and it is silent. `False` is falsy to every
+    condition that tests the slot, and reading a path through it yields null exactly as an unset
+    slot does, so the intent survives and the write actually happens. Found 15 September 2026, when
+    tb-roster stopped registering any model on a node that already had one."""
+    return {"name": "map", "input": {
+        "mappings": [{"path": p, "logic": False if l is None else l} for p, l in pairs]}}
 
 
 def plugin(fn: str, inp: dict) -> dict:
