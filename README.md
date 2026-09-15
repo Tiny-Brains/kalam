@@ -233,6 +233,10 @@ artifact image, named by `ANTS_REF`, so there is one copy and the two cannot dis
 **The engine digest moved from `sha256:f17b51b6…` to `sha256:0807b641…`**, declared as a *patch*
 rather than a release: `ants`' `cartridge.json` and `reference/observations.json` are byte-identical
 across the change, so no rule moved and the live season kept its ratings and took the new digest.
+(It has moved again since — R5 put the visibility mask in `observe`, which **is** a protocol change,
+and the engine the ladder plays today is `sha256:185a2845…`. Nothing here names a digest; read it
+from `games.active_engine_digest` or from `tinybrains games`, and treat any digest written in prose
+as the date it was written.)
 Verified on the running stack — `games.active_engine_digest`, the live season, and both replicas'
 `[vars] engine_digest` all read the same value, no channel quarantined. The loader also registers
 the engine's own 10-observation reference set now, rather than a single worst-case fixture
