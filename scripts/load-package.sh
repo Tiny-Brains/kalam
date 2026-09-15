@@ -10,7 +10,7 @@
 #   ORION_ADMIN                admin API base (default http://127.0.0.1:8080/api/v1/admin)
 #   ORION_ADMIN_API_KEY        sent as a bearer token when admin_auth is enabled
 #   KALAM_ALLOW_PRIVATE_URLS   1 to set allow_private_urls on the database and loader connectors
-#   MODEL_LOADER_URL           the loader's address, substituted into the model-loader connector
+#   KALAM_ORION_ADMIN          this node's own admin API, substituted into the kalam-orion connector
 #   R2_ENDPOINT                the replay store, substituted into the kalam-blobs-put connector
 #
 # THE TWO HTTP URLS ARE SUBSTITUTED HERE rather than written in the connectors, because Orion
@@ -99,8 +99,13 @@ echo "==> connectors"
 for f in connectors/*.json; do
   id=$(field "$f" id)
   case "$id" in
-    model-loader)    SUB_URL="${MODEL_LOADER_URL:-http://127.0.0.1:9090}" with_url "$f" ;;
+    kalam-orion)     SUB_URL="${KALAM_ORION_ADMIN:-http://127.0.0.1:8080/api/v1/admin}" with_url "$f" ;;
     kalam-blobs-put) SUB_URL="$R2_ENDPOINT" with_url "$f" ;;
+    # A STORAGE connector is SSRF-checked too, and the models bucket is a compose service name that
+    # resolves to a private address -- so a replica that cannot opt out cannot fetch the artifact it
+    # was told to play. The flag is deployment, not package: it is applied here, exactly as the
+    # database connector's is.
+    kalam-models)    if [ "$ALLOW_PRIVATE" = 1 ]; then with_private_urls "$f"; else cat "$f"; fi ;;
     kalam-db)        if [ "$ALLOW_PRIVATE" = 1 ]; then with_private_urls "$f"; else cat "$f"; fi ;;
     *)               cat "$f" ;;
   esac | post connectors

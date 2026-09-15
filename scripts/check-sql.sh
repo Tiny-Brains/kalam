@@ -55,7 +55,7 @@ DECLARE missing text;
 BEGIN
     SELECT string_agg(c, ', ') INTO missing FROM unnest(ARRAY[
         'status','claim_token','lease_expires_at','lapses','refusals','reason','turns',
-        'played_ms','engine_digest_played','evaluator_digest','replay_key','played_at',
+        'played_ms','engine_digest_played','orion_version','replay_key','played_at',
         'fault_reason','fault_seat','closed_at']) AS c
      WHERE NOT has_column_privilege('kalam', 'matches', c, 'UPDATE');
     IF missing IS NOT NULL THEN
@@ -68,6 +68,25 @@ BEGIN
     END IF;
     IF has_column_privilege('kalam', 'matches', 'rated_at', 'UPDATE') THEN
         RAISE EXCEPTION 'the kalam role can write matches.rated_at -- counting is Jodi''s';
+    END IF;
+    -- The roster clock reads model_versions, and reads FOUR COLUMNS of it (decision R8). The
+    -- absences are the point: a replica that can name a model still cannot see what class it is
+    -- in, what it was measured at, or why it was refused.
+    SELECT string_agg(c, ', ') INTO missing
+      FROM unnest(ARRAY['id','status','manifest','artifact_key','weights_hash','created_at']) AS c
+     WHERE NOT has_column_privilege('kalam', 'model_versions', c, 'SELECT');
+    IF missing IS NOT NULL THEN
+        RAISE EXCEPTION 'the kalam role cannot SELECT model_versions.%', missing;
+    END IF;
+    SELECT string_agg(c, ', ') INTO missing
+      FROM unnest(ARRAY['weight_class','param_count','infer_us','reject_reason',
+                        'admit_token','size_bytes']) AS c
+     WHERE has_column_privilege('kalam', 'model_versions', c, 'SELECT');
+    IF missing IS NOT NULL THEN
+        RAISE EXCEPTION 'the kalam role can read a competitive decision: model_versions.%', missing;
+    END IF;
+    IF has_table_privilege('kalam', 'ratings', 'SELECT') THEN
+        RAISE EXCEPTION 'the kalam role can read ratings';
     END IF;
 END $$;
 SQL

@@ -1,36 +1,44 @@
 #!/usr/bin/env python3
-"""Generate Kalam's wave channel and its workflow.
+"""Generate Kalam's channels and workflows.
 
-The generated files ARE the package: committed, loaded by scripts/load-package.sh, and what a
-reviewer reads for the task graph. Re-run this after any edit here and commit the output with it.
-The statements are soma/docs/schema.md §4; the task graph is docs/design.md §4.
+The SQL and the JSONLogic are unreadable inline in JSON and readable here, so this file is the
+source and `workflows/*.json` + `channels/*.json` are build output. `Dockerfile` regenerates them
+into the artifact image and runs `--check` straight after, so a hand-edited file is a failed build.
 
-Orion 1.7.0 mechanics the workflow below depends on, none of them obvious:
+Two clocks since the 1.8.1 rebuild (devops/docs/decisions.md, the R-series):
 
-  * ELEMENT SCOPE DOES NOT NEST INSIDE ROOT SCOPE. Inside a `map`, `filter` or `reduce` body,
-    `{"var": "data.x"}` and `{"var": "metadata.vars.x"}` are null -- and `{"==": [0, null]}` is
-    TRUE under this engine's loose equality, so the mistake selects the falsy elements rather than
-    failing. Compare with `===`, and carry any root value a body needs in `reduce`'s seed, the one
-    expression evaluated at root that threads into the body. `sift` below is that trick.
-  * JSONLogic cannot number a list, so Postgres numbers the wave (K_WAVE).
-  * `{"merge": [A, B]}` concatenates two computed arrays; `{"merge": <one expression>}` does not
-    flatten at all. Flattening a computed array of arrays is a reduce over merge.
-  * `storage_presign` returns a plain string, and `http_call` always prefixes its connector's base
-    URL onto `path`, so a presigned URL must be reduced to `substr(url, length(base))`.
-    `force_path_style` on the storage connector makes that subtraction exact: the URL is
-    `endpoint/bucket/key`, so the prefix is precisely the endpoint.
-  * `http_call` parses the reply as JSON unless told otherwise, and an S3 PUT answers with an empty
-    body -- hence `response_format: "text"`.
-  * `{"now": []}` returns an ISO-8601 string.
+  tb-roster   reconciles this node's model set with the shared schema. Every version the ladder
+              says is verified or active is registered here, admitted here, and activated here.
+              Jodi never calls a replica: the database is the only channel (R8).
+
+  tb-match    claims ONE queued row and plays it turn by turn -- observe, one `model_infer` per
+              seat, step -- and finishes it in place. The wave is gone: every Ants map is
+              two-player, so K rows per claim existed to amortise one batched inference call over
+              a number that is two (R7).
+
+Run with no arguments to write the files; `--check` fails if what is on disk has drifted.
 """
+
+from __future__ import annotations
 
 import json
 import pathlib
 import re
+import sys
 
 PKG = pathlib.Path(__file__).resolve().parent.parent
 
 ENGINE = "tb.ants"
+
+# How many seats a match may have and still be claimed here. The task list is fixed, so a seat is
+# a task: four is every board the catalogue ships (all 2-player) with room for a 4-player preset,
+# and the claim refuses anything wider rather than playing it short a seat.
+MAX_SEATS = 4
+
+# The action alphabet, and the ONE place the platform knows it. It is the cartridge's, read off
+# `docs/protocol.md` §1 -- a per-cell head's channel order is part of the game's contract, not the
+# competitor's (R3).
+DIRS = ["N", "E", "S", "W", "-"]
 
 
 # ======================================================================= helpers
@@ -63,11 +71,25 @@ def vars_(name: str) -> dict:
     return {"var": f"metadata.vars.{name}"}
 
 
-def task(tid: str, name: str, fn: dict, cond=None, terminal: bool = False) -> dict:
+def root(*segments) -> dict:
+    """A ROOT value read from inside one iterator body.
+
+    `{"val": [[1], …]}` leaves the innermost frame; at or above the number of enclosing iterators
+    it resolves against the root. Inside a NESTED iterator the enclosing element is not reachable
+    at all -- verified, not assumed -- which is why every cross-product in this file is carried in
+    a reduce's accumulator instead.
+    """
+    return {"val": [[1], *segments]}
+
+
+def task(tid: str, name: str, fn: dict, cond=None, terminal: bool = False,
+         soft: bool = False) -> dict:
     t = {"id": tid, "name": name}
     if cond is not None:
         t["condition"] = cond
     t["function"] = fn
+    if soft:
+        t["continue_on_error"] = True
     if terminal:
         t["terminal"] = True
     return t
@@ -96,14 +118,9 @@ def http(connector: str, method: str, path, output: str, body=None, **extra) -> 
     return {"name": "http_call", "input": inp}
 
 
-def loader(path: str, output: str, body=None, method: str = "POST") -> dict:
-    return http("model-loader", method, path, output, body)
-
-
-def unload(models: dict) -> dict:
-    """A `filter` halt cannot release the models, so every exit from a wave is an unload plus a
-    terminal task rather than a halt."""
-    return loader("/unload", "temp_data.unheld", {"models": models})
+def admin(method: str, path, output: str, body=None, **extra) -> dict:
+    """A call to THIS node's own admin API, which is where its model set lives."""
+    return http("kalam-orion", method, path, output, body, **extra)
 
 
 def halt_unless(condition: dict) -> dict:
@@ -130,6 +147,12 @@ def sift(source: dict, carried: dict, test=None, element=None, items=None,
     return {"reduce": [source, body, dict(carried, items=[] if items is None else items)]}
 
 
+def model_id(version_expr: dict) -> dict:
+    """The Orion model id of a version (R9). Derived, never stored: an Orion label may not begin
+    with a digit, so a bare uuid is refused and `tb.v` is the prefix that fixes it."""
+    return {"cat": [vars_("model_prefix"), version_expr]}
+
+
 # ======================================================================= the statements
 #
 # Every one is soma/docs/schema.md §4, and every one is conditioned on the claim token so a stale
@@ -139,503 +162,508 @@ def sift(source: dict, carried: dict, test=None, element=None, items=None,
 # invisible to the claim in the same snapshot and a reaped row would wait one more poll.
 K_REAP = """
 UPDATE matches
-   SET status           = CASE WHEN lapses + 1 >= 3 THEN 'failed' ELSE 'pending' END::match_status,
-       lapses           = lapses + 1,
-       claim_token      = NULL,
-       lease_expires_at = NULL,
-       fault_reason     = CASE WHEN lapses + 1 >= 3 THEN 'LEASE_LAPSED' END,
-       closed_at        = CASE WHEN lapses + 1 >= 3 THEN now() END
- WHERE status IN ('claimed', 'running')
-   AND lease_expires_at < now()
+   SET status = CASE WHEN lapses + 1 >= 3 THEN 'failed' ELSE 'pending' END::match_status,
+       lapses = lapses + 1, claim_token = NULL, lease_expires_at = NULL,
+       fault_reason = CASE WHEN lapses + 1 >= 3 THEN 'LEASE_LAPSED' END,
+       closed_at = CASE WHEN lapses + 1 >= 3 THEN now() END
+ WHERE status IN ('claimed', 'running') AND lease_expires_at < now()
 """
 
-# --- 4.2 claim. $1 engine digest · $2 resident weights hashes · $3 K · $4 token · $5 lease seconds.
-# Trial priority and affinity choose the first row; the wave is filled with rows sharing its models
-# and its preset, so one inference serves the wave by construction. SKIP LOCKED is the whole of the
-# coordination between replicas.
+# --- 4.2 claim, and it takes ONE row. $1 engine digest · $2 token · $3 lease seconds · $4 seats.
+#
+# What went with the wave: the resident-weights affinity ordering (an optimisation of a residency
+# model that no longer exists -- the session cache loads on demand) and the preset grouping (which
+# existed so one `observe` call could serve a whole wave of one board). What stays: trials first,
+# then oldest, and `FOR UPDATE SKIP LOCKED` so N replicas and N match channels take disjoint rows
+# rather than queueing behind each other.
+#
+# `seat_count <= $4` is new and deliberate. A seat is a task and the task list is fixed, so a
+# 6-player preset must not be claimed by a replica that can only play four: refusing to claim is
+# visible in the queue, playing it short a seat would be a match nobody could explain.
 K_CLAIM = """
-WITH first AS MATERIALIZED (
-    SELECT m.id, m.preset
-      FROM matches m
+WITH pick AS MATERIALIZED (
+    SELECT m.id FROM matches m
      WHERE m.status = 'pending' AND m.engine_digest = ($1)::text
-     ORDER BY (m.trial_version_id IS NOT NULL) DESC,
-              EXISTS (SELECT 1 FROM match_seats s
-                       WHERE s.match_id = m.id
-                         AND s.weights_hash = ANY (($2)::text[])) DESC,
-              m.created_at, m.id
-     LIMIT 1
-       FOR UPDATE SKIP LOCKED
-), wave AS MATERIALIZED (
-    SELECT m.id
-      FROM matches m, first f
-     WHERE m.status = 'pending' AND m.engine_digest = ($1)::text
-       AND m.preset = f.preset
-       AND (m.id = f.id
-            OR EXISTS (SELECT 1 FROM match_seats a
-                         JOIN match_seats b ON b.weights_hash = a.weights_hash
-                        WHERE a.match_id = f.id AND b.match_id = m.id))
-     ORDER BY (m.id = f.id) DESC, (m.trial_version_id IS NOT NULL) DESC, m.created_at, m.id
-     LIMIT ($3)::int
-       FOR UPDATE OF m SKIP LOCKED
-)
+       AND m.seat_count <= ($4)::int
+     ORDER BY (m.trial_version_id IS NOT NULL) DESC, m.created_at, m.id
+     LIMIT 1 FOR UPDATE SKIP LOCKED)
 UPDATE matches m
-   SET status           = 'claimed',
-       claim_token      = ($4)::uuid,
-       lease_expires_at = now() + ($5)::int * interval '1 second'
-  FROM wave
- WHERE m.id = wave.id
+   SET status = 'claimed', claim_token = ($2)::uuid,
+       lease_expires_at = now() + ($3)::int * interval '1 second'
+  FROM pick WHERE m.id = pick.id
 """
 
-# --- the models the wave needs, read before the barrier and so before the wave can be numbered.
-# The reply is already the exact body /load wants.
-K_MODELS = """
-SELECT DISTINCT s.weights_hash, s.adapter_hash
+# --- 4.3 read the claimed row and its seats. One row, so no `row_number()`: the engine's wave
+# still has an `m`, and it is 0 for the whole run.
+#
+# `model` is DERIVED here rather than stored: the version id is the model id (R9), so a row and a
+# node cannot disagree about what to call a model. `weights_hash` and `manifest_hash` are carried
+# for the replay envelope -- the record of what was paired, not what the version row says today.
+K_ROW = """
+SELECT json_build_object(
+         'id', m.id, 'seed', m.seed, 'preset', m.preset, 'seat_count', m.seat_count,
+         'trial_model_id', m.trial_version_id, 'strike_ceiling', m.strike_ceiling,
+         'seats', (SELECT json_agg(json_build_object(
+                     'm', 0, 'seat', s.seat, 'version_id', s.version_id,
+                     'model', ($2)::text || s.version_id::text,
+                     'strike_ceiling', m.strike_ceiling,
+                     'weights_hash', s.weights_hash,
+                     'manifest_hash', s.manifest_hash) ORDER BY s.seat)
+                    FROM match_seats s WHERE s.match_id = m.id)) AS row
   FROM matches m
-  JOIN match_seats s ON s.match_id = m.id
  WHERE m.claim_token = ($1)::uuid AND m.status = 'claimed'
- ORDER BY s.weights_hash, s.adapter_hash
 """
 
-# --- 4.4 release. Refused for want of memory: back to the queue, NO LAPSE SPENT, under its own
-# ceiling. Keyed by the refused weights HASHES, because mapping a refused model back to its rows is
-# a join from element scope into root scope -- which JSONLogic cannot do and Postgres can.
-# $1 token · $2 refused weights hashes · $3 the refusal ceiling.
+# --- 4.4 release: the models this replica has not caught up with yet. NOT a fault and NOT a lapse
+# -- the row goes back to the queue with `refusals` spent, so a replica that is permanently behind
+# eventually fails the row rather than passing it round the fleet for ever. The roster clock is
+# what makes this rare; without the statement it would be a match played with one seat blind.
 K_RELEASE = """
 UPDATE matches
-   SET status           = CASE WHEN refusals + 1 >= ($3)::int THEN 'failed' ELSE 'pending' END::match_status,
-       refusals         = refusals + 1,
-       claim_token      = NULL,
-       lease_expires_at = NULL,
-       fault_reason     = CASE WHEN refusals + 1 >= ($3)::int THEN 'UNLOADABLE' END,
-       closed_at        = CASE WHEN refusals + 1 >= ($3)::int THEN now() END
- WHERE claim_token = ($1)::uuid AND status = 'claimed'
-   AND EXISTS (SELECT 1 FROM match_seats s
-                WHERE s.match_id = matches.id
-                  AND s.weights_hash = ANY (($2)::text[]))
+   SET status = CASE WHEN refusals + 1 >= ($3)::int THEN 'failed' ELSE 'pending' END::match_status,
+       refusals = refusals + 1, claim_token = NULL, lease_expires_at = NULL,
+       fault_reason = CASE WHEN refusals + 1 >= ($3)::int THEN 'MODEL_UNAVAILABLE' END,
+       closed_at = CASE WHEN refusals + 1 >= ($3)::int THEN now() END
+ WHERE claim_token = ($1)::uuid AND status = 'claimed' AND ($2)::boolean
 """
 
-# --- 4.4 fail, set-valued. Refused BY NAME -- a hash mismatch, a graph or adapter that will not
-# build. Failed at once, with the seat it is attributed to; DISTINCT ON picks the lowest offending
-# seat when a row has more than one. $1 token · $2 [{weights_hash, reason}].
-K_FAIL_SET = """
-UPDATE matches m
-   SET status           = 'failed',
-       fault_reason     = x.reason,
-       fault_seat       = x.seat,
-       closed_at        = now(),
-       lease_expires_at = NULL
-  FROM (SELECT DISTINCT ON (s.match_id) s.match_id, s.seat, v.reason
-          FROM jsonb_to_recordset(($2)::jsonb) AS v (weights_hash text, reason text)
-          JOIN match_seats s ON s.weights_hash = v.weights_hash
-         ORDER BY s.match_id, s.seat) AS x
- WHERE m.id = x.match_id AND m.claim_token = ($1)::uuid AND m.status = 'claimed'
-"""
-
-# --- 4.4 start: everything still 'claimed' once the two refusal statements have run, so no id list
-# is needed.
+# --- 4.4 start.
 K_START = """
 UPDATE matches SET status = 'running'
  WHERE claim_token = ($1)::uuid AND status = 'claimed'
 """
 
-# --- 4.3 read the wave, numbered. It runs AFTER `start` and filters on 'running', so the engine's
-# match indices and the refs agree by construction -- number the claim instead and the barrier's
-# refusals shift every index, silently seating one competitor's model in another's chair. `m` is
-# repeated onto every seat because the refs are a FLAT list the engine matches on (m, seat).
-K_WAVE = """
-WITH w AS (
-    SELECT m.id, m.seed, m.preset, m.seat_count, m.trial_version_id, m.strike_ceiling,
-           (row_number() OVER (ORDER BY m.id) - 1)::int AS m
-      FROM matches m
-     WHERE m.claim_token = ($1)::uuid AND m.status = 'running'
-)
-SELECT json_build_object(
-         -- `trial_model_id` and `model_id` are the WIRE KEYS the run and the replay envelope use;
-         -- the columns behind them are named for versions now. Renaming a column is a schema
-         -- change, renaming these would be a protocol change.
-         'm', w.m, 'id', w.id, 'seed', w.seed, 'preset', w.preset,
-         'seat_count', w.seat_count, 'trial_model_id', w.trial_version_id,
-         -- THE RULE THIS MATCH IS PLAYED BY, off the row pair stamped it on. Kalam keeps no copy of
-         -- this number in its own config any more: the wave and the clock that judges its result
-         -- now read one value from one place, instead of two [vars] in two repositories that a
-         -- deployment check had to assert equal.
-         'strike_ceiling', w.strike_ceiling,
-         'seats', (SELECT json_agg(json_build_object(
-                      'm', w.m, 'seat', s.seat, 'model_id', s.version_id,
-                      'strike_ceiling', w.strike_ceiling,
-                      'weights_hash', s.weights_hash, 'adapter_hash', s.adapter_hash)
-                    ORDER BY s.seat)
-                     FROM match_seats s WHERE s.match_id = w.id)
-       ) AS row
-  FROM w
- ORDER BY w.m
-"""
-
-# --- 4.5 renew. No indexed column changes, so it stays heap-only -- the statement the table's fill
-# factor exists for. Zero rows means the lease was reaped and the wave belongs to someone else.
+# --- 4.5 renew. No indexed column changes, so it stays heap-only -- the statement the table's
+# fillfactor exists for.
 K_RENEW = """
-UPDATE matches
-   SET lease_expires_at = now() + ($2)::int * interval '1 second'
+UPDATE matches SET lease_expires_at = now() + ($2)::int * interval '1 second'
  WHERE claim_token = ($1)::uuid AND status = 'running'
 """
 
 # --- 4.6 finish. $1 token · $2 match · $3 the result, one element per seat · $4 the engine's end
-# reason · $5 turns · $6 when the wave opened · $7, $8 the digests that played it · $9 replay key.
+# reason · $5 turns · $6 opened at · $7 engine digest · $8 the Orion that ran the adapters · $9 key.
 #
-# `played_ms` is subtracted here because Postgres holds one instant and the workflow carries the
-# other. rows_affected is seat_count; zero means the token is stale OR the result did not name
-# every seat once, and in both cases nothing was written.
+# One statement: the row and its seats move together or not at all. The seat count check is what
+# refuses a partial result -- a result naming three of four seats leaves the row running and the
+# lease reaps it, which is recoverable, where a half-written match is not.
 K_FINISH = """
 WITH m AS (
     UPDATE matches
-       SET status               = 'finished',
-           reason               = ($4)::text,
-           turns                = ($5)::int,
-           played_ms            = GREATEST(0, (EXTRACT(EPOCH FROM (now() - ($6)::timestamptz)) * 1000)::int),
-           engine_digest_played = ($7)::text,
-           evaluator_digest     = ($8)::text,
-           replay_key           = ($9)::text,
-           played_at            = now(),
-           lease_expires_at     = NULL
+       SET status = 'finished', reason = ($4)::text, turns = ($5)::int,
+           played_ms = GREATEST(0, (EXTRACT(EPOCH FROM (now() - ($6)::timestamptz)) * 1000)::int),
+           engine_digest_played = ($7)::text, orion_version = ($8)::text,
+           replay_key = ($9)::text, played_at = now(), lease_expires_at = NULL
      WHERE id = ($2)::uuid AND claim_token = ($1)::uuid AND status = 'running'
-       AND (SELECT count(DISTINCT v.seat)
-              FROM jsonb_to_recordset(($3)::jsonb) AS v (seat smallint)
+       AND (SELECT count(DISTINCT v.seat) FROM jsonb_to_recordset(($3)::jsonb) AS v (seat smallint)
              WHERE v.seat BETWEEN 0 AND seat_count - 1) = seat_count
- RETURNING id
-)
+ RETURNING id)
 UPDATE match_seats s
    SET rank = v.rank, score = v.score, strikes = v.strikes,
        infer_us_total = v.infer_us_total, infer_us_max = v.infer_us_max,
        infer_turns = v.infer_turns
-  FROM m,
-       jsonb_to_recordset(($3)::jsonb) AS v (seat smallint, rank smallint, score int,
-                                             strikes smallint, infer_us_total bigint,
-                                             infer_us_max int, infer_turns int)
+  FROM m, jsonb_to_recordset(($3)::jsonb)
+       AS v (seat smallint, rank smallint, score int, strikes smallint,
+             infer_us_total bigint, infer_us_max int, infer_turns int)
  WHERE s.match_id = m.id AND s.seat = v.seat
 """
 
+# --- the roster read. Every version this node should be able to play, with the manifest it was
+# admitted under and where its bytes are. `verified` as well as `active`: a verified version's
+# trial match is a real match and it is paired before promotion, so a replica that waits for
+# `active` cannot play the trial that produces it.
+#
+# Ordered oldest-first so a backlog is worked in submission order, and LIMITed because the clock
+# does one registration step per item per tick -- it is a reconciler, not a batch job.
+R_ROSTER = """
+SELECT json_build_object(
+         'n', count(*),
+         'items', coalesce(json_agg(json_build_object(
+                    'model', ($1)::text || v.id::text,
+                    'version_id', v.id,
+                    'digest', v.weights_hash,
+                    'key', v.artifact_key,
+                    -- WHAT IS REGISTERED IS NOT WHAT WAS UPLOADED, and the difference is two
+                    -- things. `name` becomes the platform's model id, because Orion takes a
+                    -- model's id from the manifest and a competitor's name is not the platform's
+                    -- (R9). And the document is rebuilt FIELD BY FIELD rather than passed through,
+                    -- so a `reference` naming somebody else's bucket key -- the one field that
+                    -- could reach outside this version -- has nowhere to survive. The stored text
+                    -- stays the competitor's exact bytes, because that is what the hash is over.
+                    'manifest', jsonb_build_object(
+                        'abi',         v.manifest::jsonb -> 'abi',
+                        'name',        to_jsonb(($1)::text || v.id::text),
+                        'version',     coalesce(v.manifest::jsonb -> 'version', '"1"'::jsonb),
+                        'format',      coalesce(v.manifest::jsonb -> 'format', '"onnx"'::jsonb),
+                        'description', coalesce(v.manifest::jsonb -> 'description', '""'::jsonb),
+                        'inputs',      v.manifest::jsonb -> 'inputs',
+                        'outputs',     v.manifest::jsonb -> 'outputs',
+                        'probe_dims',  coalesce(v.manifest::jsonb -> 'probe_dims', '{}'::jsonb)),
+                    'status', v.status) ORDER BY v.created_at), '[]'::json)) AS body
+  FROM model_versions v
+ WHERE v.status IN ('verified', 'active')
+   AND v.manifest IS NOT NULL AND v.artifact_key IS NOT NULL AND v.weights_hash IS NOT NULL
+   AND EXISTS (SELECT 1 FROM match_seats s WHERE s.version_id = v.id)
+"""
 
-# ======================================================================= the conditions
+
+# ======================================================================= shared conditions
 
 TURN0 = {"==": [var("temp_data.i"), 0]}
 LIVE = {">": [var("temp_data.n_live"), 0]}
-PENDING = {">": [var("temp_data.n_pending"), 0]}
-# The wave is over when nothing is live AND the finish queue is empty. `observe` returns no views
-# once every match has ended, so the tail sweeps cost almost nothing.
-OVER = {"and": [{"==": [var("temp_data.n_live"), 0]},
-                {"==": [var("temp_data.n_pending"), 0]}]}
-NOTHING_STARTED = {"and": [TURN0, {"==": [var("temp_data.started.rows_affected"), 0]}]}
+ENDED = {"and": [{"==": [var("temp_data.n_live"), 0]},
+                 {"!": var("data.finished")}]}
+OVER = var("data.finished")
+
+NOT_CLAIMED = {"and": [TURN0, {"!": wrote("temp_data.claim")}]}
+NOT_READY = {"and": [TURN0, {">": [var("temp_data.n_missing"), 0]}]}
+
 DO_RENEW = {"and": [LIVE,
                     {">": [var("temp_data.i"), 0]},
                     {"==": [{"%": [var("temp_data.i"), vars_("renew_every_n_turns")]}, 0]}]}
-# Halt on ANY shortfall. All of a wave's rows carry one lease and expire together, so a partial
-# renew cannot happen in the ordinary course -- if it does, this replica's grip is not what it
-# believes.
-RENEW_LOST = {"and": [DO_RENEW,
-                      {"<": [var("temp_data.renewed.rows_affected"), var("data.n_running")]}]}
-
-# The head of the finish queue, in element scope. `===`: a `==` against a path that does not
-# resolve silently selects the falsy elements instead.
-IS_HEAD = {"===": [var("current.m"), var("accumulator.head")]}
-HEAD = {"head": var("temp_data.head")}
+RENEW_LOST = {"and": [DO_RENEW, {"!": wrote("temp_data.renewed")}]}
 
 
-# ======================================================================= the run
+def seat(i: int) -> dict:
+    """The i-th seat of the claimed row, as `open` wrote it."""
+    return {"val": ["data", "seats", i]}
 
-# One strike per row the loader could not play. Bound to a name because the forfeit test needs the
-# same expression, and the two must not drift.
-NEXT_STRIKES = {"+": [var("current.ref.strikes"), {"if": [var("current.action"), 0, 1]}]}
 
-# What the row's model COST this turn: its share of its own group's inference, from the loader. Not
-# `elapsed_ms`, which runs from a row entering the call to leaving it and so reports roughly the
-# whole call for every row. Defaulted because an error row carries no figure worth adding.
-THIS_INFER_US = {"??": [var("current.infer_us"), 0]}
-NEXT_INFER_TOTAL = {"+": [var("current.ref.infer_us_total"), THIS_INFER_US]}
-NEXT_INFER_MAX = {"if": [{">": [THIS_INFER_US, var("current.ref.infer_us_max")]},
-                         THIS_INFER_US, var("current.ref.infer_us_max")]}
-NEXT_INFER_TURNS = {"+": [var("current.ref.infer_turns"), 1]}
+def seat_exists(i: int) -> dict:
+    return {">": [var("data.row.seat_count"), i]}
 
-TASKS = [
+
+def seat_plays(i: int) -> dict:
+    """A seat is asked for a move while the match is live, it exists, and it has not forfeited.
+    A forfeited seat is never inferred: it plays the no-op by construction, which is the same
+    rule the wave had and the reason a forfeit costs nothing after it is taken."""
+    return {"and": [LIVE, seat_exists(i), {"!": var(f"data.f{i}")}]}
+
+
+def view_of(i: int) -> dict:
+    """The i-th seat's view out of `observe`, selected by the ref it echoed rather than by
+    position: a match that has ended returns no view at all, and position would then hand seat 1's
+    observation to seat 0."""
+    return {"reduce": [var("temp_data.obs.views"),
+                       {"if": [{"===": [var("current.ref.seat"), i]},
+                               var("current.view"), var("accumulator")]},
+                       None]}
+
+
+def decode(i: int) -> dict:
+    """One seat's policy tensor to one action per ant, positionally aligned with `mine` (R3).
+
+    The platform does this, not the manifest, and it is not a preference: a `result` expression's
+    root is the output tensors alone, so it cannot see the observation and cannot gather at the
+    ants' cells. Both head shapes are legal and the rank tells them apart --
+
+      [1, 5, H, W]  per-cell: reshape to [5, H*W], gather the ants' flat indices, transpose to
+                    [n, 5], argmax the channel axis.
+      [n, 5]        per-ant: already in `mine` order, because the adapter fed the coordinates in
+                    that order. Argmax and nothing else.
+
+    Verified against numpy on every reference observation before it was written here.
+    """
+    policy = var(f"temp_data.p{i}.policy")
+    per_cell = {"transpose": [
+        {"gather": [{"reshape": [policy, [5, var("temp_data.cells")]]},
+                    var("temp_data.idx"), 1]},
+        [1, 0]]}
+    chosen = {"argmax": [{"if": [{"==": [{"length": [{"shape": [policy]}]}, 4]},
+                                 per_cell, policy]}, 1]}
+    return {"if": [
+        {"!": policy}, None,
+        {"map": [chosen, {"val": [[1], "data", "dirs", var("")]}]}]}
+
+
+# ======================================================================= tb-match
+
+MATCH_TASKS = [
     # ------------------------------------------------------------------ turn 0: claim
-    # One token for the whole wave, minted before the claim and carried in `data`, so the renew and
-    # every finish condition on the same value: a stale replica's finish updates nothing.
     task("token", "Mint this attempt's claim token", mapping(
         ("data.token", {"random": ["uuid"]}),
         ("data.opened_at", {"now": []}),
+        ("data.dirs", DIRS),
+        ("data.finished", False),
     ), cond=TURN0),
 
     # A MISSING [vars] VALUE IS SILENT AND CATASTROPHIC: `{">=": [1, null]}` is true, so a
-    # comparison against an unresolved ceiling passes and the wave dies two turns later at `step`,
+    # comparison against an unresolved ceiling passes and the match dies two turns later at `step`,
     # naming neither the variable nor the cause. So: checked once, loudly, up front.
-    #
-    # `strike_ceiling` is deliberately NOT in this list any more. It is pinned on the match row by
-    # pair and read from there, so a replica cannot be configured with a ceiling that disagrees with
-    # the clock that judges the result -- the failure this guard existed to make loud is now one the
-    # schema's NOT NULL makes impossible.
     task("vars", "Halt unless this replica is configured", halt_unless({"and": [
         {"!=": [vars_("engine_digest"), None]},
-        {">": [vars_("wave_k"), 0]},
         {">": [vars_("lease_seconds"), 0]},
         {">": [vars_("renew_every_n_turns"), 0]},
         {">": [vars_("turn_ms"), 0]},
         {">": [vars_("max_turns"), 0]},
-        {">": [vars_("budget_ops"), 0]},
         {">": [vars_("refusal_ceiling"), 0]},
         {"!=": [vars_("replay_prefix"), None]},
         {"!=": [vars_("blob_endpoint"), None]},
+        {"!=": [vars_("model_prefix"), None]},
+        {"!=": [vars_("orion_version"), None]},
     ]}), cond=TURN0),
-
-    task("resident", "What this replica's loader already holds", loader(
-        "/resident", "temp_data.res", method="GET",
-    ), cond=TURN0),
 
     task("reap", "Return lapsed leases to the queue", db(
         "db_write", K_REAP, [], "temp_data.reaped",
     ), cond=TURN0),
 
-    task("claim", "Claim a wave", db(
+    task("claim", "Claim one queued match", db(
         "db_write", K_CLAIM,
-        # The resident list is advisory and allowed to be stale -- affinity is an optimisation of
-        # the fill and the barrier is where correctness lives. `loading` is deliberately NOT passed
-        # on, so a wave is never filled with rows whose models are still cold.
-        [vars_("engine_digest"), var("temp_data.res.weights"),
-         vars_("wave_k"), var("data.token"), vars_("lease_seconds")],
+        [vars_("engine_digest"), var("data.token"), vars_("lease_seconds"), MAX_SEATS],
         "temp_data.claim",
     ), cond=TURN0),
 
-    task("claimed", "Nothing to play: end the run here", halt_unless(wrote("temp_data.claim")),
-         cond=TURN0),
+    task("idle", "Nothing queued for this engine: end the run", mapping(
+        ("data.outcome", "idle"),
+    ), cond=NOT_CLAIMED, terminal=True),
 
+    task("row", "The row, its seats and their model ids", db(
+        "db_read", K_ROW, [var("data.token"), vars_("model_prefix")], "temp_data.rows",
+    ), cond=TURN0),
+
+    task("open", "What the run rides on", mapping(
+        ("data.row", var("temp_data.rows.0.row")),
+        ("data.seats", var("temp_data.rows.0.row.seats")),
+        # THE REFS. A flat list, each entry carrying its own m and seat, which the engine matches
+        # on rather than indexes -- and where the per-seat counters live, because a fixed task list
+        # has no other way to accumulate anything per seat across turns. Seeded at 0, not left
+        # absent: `{"+": [null, x]}` on a first write is exactly the silent-null class of bug this
+        # file keeps warning about.
+        ("data.refs", {"map": [var("data.seats"),
+                               {"m": 0, "seat": var("seat"),
+                                "model": var("model"),
+                                "weights_hash": var("weights_hash"),
+                                "manifest_hash": var("manifest_hash"),
+                                "strike_ceiling": var("strike_ceiling"),
+                                "strikes": 0, "forfeited": False,
+                                "infer_us_total": 0, "infer_us_max": 0, "infer_turns": 0}]}),
+        ("data.deltas", []),
+        ("data.struck", 0),
+    ), cond=TURN0),
+] + [
     # ------------------------------------------------------------------ turn 0: the barrier
-    task("models", "The wave's distinct models", db(
-        "db_read", K_MODELS, [var("data.token")], "temp_data.mods",
+    #
+    # The residency barrier is gone with the sidecar, but one thing it did still has to happen:
+    # a seat whose model this node cannot serve must not play. The roster clock registers and
+    # activates from the shared schema and is normally ahead of the pairing, so this is the lag
+    # case -- a GET per seat against this node's own admin API, on localhost, once per match,
+    # against a thousand turns.
+    task(f"has{i}", f"Can this node serve seat {i}'s model?", admin(
+        "GET", {"cat": ["/models/", {"val": ["data", "seats", i, "model"]}]},
+        f"temp_data.m{i}",
+    ), cond={"and": [TURN0, seat_exists(i)]}, soft=True)
+    for i in range(MAX_SEATS)
+] + [
+    task("barrier", "How many seats this node cannot play", mapping(
+        # Through the admin API's `data` envelope, which is what every reply carries. Reading
+        # `temp_data.m{i}.status` instead finds null, `null != "active"` is true, and every match
+        # is released as unready for ever -- with both sides looking healthy.
+        ("temp_data.n_missing", {"+": [
+            *[{"if": [{"and": [seat_exists(i),
+                               {"!==": [var(f"temp_data.m{i}.data.status"), "active"]}]}, 1, 0]}
+              for i in range(MAX_SEATS)]]}),
     ), cond=TURN0),
 
-    task("hold", "Ask the loader to hold them -- one call for the whole wave", loader(
-        "/load", "temp_data.hold", {"models": var("temp_data.mods")},
-    ), cond=TURN0),
-
-    # The split reads `fault`, not the reason word (axon/docs/design.md §6), so a reason word added
-    # to the loader later costs no change here.
-    task("split", "Partition the reply by fault, not by reason word", mapping(
-        ("temp_data.refused_mem", {"map": [
-            {"filter": [var("temp_data.hold.models"),
-                        {"or": [{"===": [var("fault"), "loader"]},
-                                {"===": [var("state"), "loading"]}]}]},
-            var("weights_hash")]}),
-        ("temp_data.refused_named", {"map": [
-            {"filter": [var("temp_data.hold.models"), {"===": [var("fault"), "model"]}]},
-            {"weights_hash": var("weights_hash"), "reason": var("reason")}]}),
-        ("temp_data.n_mem", {"length": [var("temp_data.refused_mem")]}),
-        ("temp_data.n_named", {"length": [var("temp_data.refused_named")]}),
-    ), cond=TURN0),
-
-    task("release", "Refused for memory: back to the queue, no attempt spent", db(
+    task("release", "A model this node cannot serve: back to the queue", db(
         "db_write", K_RELEASE,
-        [var("data.token"), var("temp_data.refused_mem"), vars_("refusal_ceiling")],
-        "temp_data.released",
-    ), cond={"and": [TURN0, {">": [var("temp_data.n_mem"), 0]}]}),
+        [var("data.token"), True, vars_("refusal_ceiling")], "temp_data.released",
+    ), cond=NOT_READY),
 
-    task("fail", "Refused by name: failed at once, with the seat", db(
-        "db_write", K_FAIL_SET, [var("data.token"), var("temp_data.refused_named")],
-        "temp_data.failed",
-    ), cond={"and": [TURN0, {">": [var("temp_data.n_named"), 0]}]}),
+    task("unready", "End the run: the roster has not caught up", mapping(
+        ("data.outcome", "model_unavailable"),
+    ), cond=NOT_READY, terminal=True),
 
-    task("start", "Everything still claimed is now running", db(
+    # ------------------------------------------------------------------ turn 0: open the match
+    task("start", "Claimed becomes running", db(
         "db_write", K_START, [var("data.token")], "temp_data.started",
     ), cond=TURN0),
 
-    task("idle-unload", "Nothing playable: release what was held",
-         unload(var("temp_data.mods")), cond=NOTHING_STARTED),
-    task("idle", "Nothing playable: end the run", mapping(
-        ("data.outcome", "nothing_started"),
-    ), cond=NOTHING_STARTED, terminal=True),
+    task("started", "Halt if the start wrote nothing: the token is stale",
+         halt_unless(wrote("temp_data.started")), cond=TURN0),
 
-    # ------------------------------------------------------------------ turn 0: open the wave
-    task("wave", "Read the wave, numbered by Postgres", db(
-        "db_read", K_WAVE, [var("data.token")], "temp_data.w",
-    ), cond=TURN0),
-
-    task("open", "Rows, seats and the refs the whole run rides on", mapping(
-        ("data.rows", {"map": [var("temp_data.w"), var("row")]}),
-        ("data.seats", {"reduce": [{"map": [var("data.rows"), var("seats")]},
-                                   {"merge": [var("accumulator"), var("current")]}, []]}),
-        # THE REFS. A flat list, each entry carrying its own m and seat, which the engine matches on
-        # rather than indexes -- and where the strike counters live, because a fixed task list has
-        # no other way to accumulate anything per seat across turns. The counter travels WITH the
-        # seat it counts: out through `observe`, onto the play row, back on the loader's echoed
-        # `ref`, and into the next turn. Neither the engine nor the loader looks inside one.
-        ("data.refs", {"map": [var("data.seats"),
-                               {"m": var("m"), "seat": var("seat"),
-                                "weights_hash": var("weights_hash"),
-                                "adapter_hash": var("adapter_hash"),
-                                # The ceiling rides WITH the seat it bounds, exactly as the strike
-                                # count does, and for the same reason: the sift below reads it in
-                                # ELEMENT scope, where a [vars] value is null -- and `{">=": [1,
-                                # null]}` is TRUE, which forfeits every seat on turn 0.
-                                "strike_ceiling": var("strike_ceiling"),
-                                "strikes": 0, "forfeited": False,
-                                # Seeded at 0, not left absent: the accumulators below add to these
-                                # every turn, and `{"+": [null, x]}` on the first write is exactly
-                                # the silent-null class of bug this file keeps warning about.
-                                "infer_us_total": 0, "infer_us_max": 0, "infer_turns": 0}]}),
-        ("data.models", var("temp_data.mods")),
-        ("data.n_running", {"length": [var("data.rows")]}),
-        ("data.pending", []),        # ended, not yet finished
-        ("data.deltas", []),         # the replay stream, drained as matches finish
-        ("data.done_refs", []),      # the refs of ended matches, snapshotted the turn they end
-        ("data.finished", 0),
-        ("data.strikes", 0),
-    ), cond=TURN0),
-
-    task("world", "Build the wave's worlds", plugin(f"{ENGINE}.worldgen", {
-        "seeds": {"map": [var("data.rows"), var("seed")]},
-        "preset": var("data.rows.0.preset"),
+    task("world", "Build the world", plugin(f"{ENGINE}.worldgen", {
+        "seeds": [var("data.row.seed")],
+        "preset": var("data.row.preset"),
         # The preset carries the seat count and the engine refuses a caller that disagrees, so
         # passing it is a free check rather than a parameter.
-        "players": var("data.rows.0.seat_count"),
+        "players": var("data.row.seat_count"),
         "max_turns": vars_("max_turns"),
         "output": "temp_data.w0",
     }), cond=TURN0),
 
-    task("init", "Open the wave", mapping(
+    task("init", "Open the match", mapping(
         ("data.state", var("temp_data.w0.wave_state")),
     ), cond=TURN0),
 
     # ------------------------------------------------------------------ every turn
-    task("observe", "Every live seat's view of every live match", plugin(f"{ENGINE}.observe", {
+    task("observe", "Every live seat's view", plugin(f"{ENGINE}.observe", {
         "wave_state": var("data.state"),
         "refs": var("data.refs"),
         "output": "temp_data.obs",
-    })),
+    }), cond={"!": OVER}),
 
-    task("counts", "How much is left", mapping(
+    task("turn", "This turn's views, and the board they are on", mapping(
         ("temp_data.n_live", {"length": [var("temp_data.obs.views")]}),
-        ("temp_data.n_pending", {"length": [var("data.pending")]}),
-        # A forfeited seat is not sent to the loader at all: it plays the no-op by construction.
-        ("temp_data.playing", {"filter": [var("temp_data.obs.views"),
-                                          {"!": [var("ref.forfeited")]}]}),
-    )),
-
-    task("play", "One play call for the whole wave", http(
-        "model-loader", "POST", "/play", "temp_data.play", {
-            # Element-relative throughout: joining back to `data.rows` by the view's own m and seat
-            # evaluates to null inside a `map`, silently, which is what `ref` exists to avoid.
-            "rows": {"map": [var("temp_data.playing"), {
-                "weights_hash": var("ref.weights_hash"),
-                "adapter_hash": var("ref.adapter_hash"),
-                "observation": var("view"),
-                "ref": var("ref"),          # echoed verbatim -- axon/docs/design.md §3.2
-            }]},
-            "deadline_ms": vars_("turn_ms"),
-            "budget_ops": vars_("budget_ops"),
+        *[(f"temp_data.v{i}", view_of(i)) for i in range(MAX_SEATS)],
+        *[(f"data.f{i}", {"val": ["data", "refs", i, "forfeited"]}) for i in range(MAX_SEATS)],
+        # The board's shape, read off any live view. Every seat of a match sees the same board, so
+        # seat 0's is the match's -- and seat 0 exists for as long as the match does.
+        ("temp_data.w", {"val": ["temp_data", "obs", "views", 0, "view", "size", 1]}),
+        ("temp_data.cells", {"*": [{"val": ["temp_data", "obs", "views", 0, "view", "size", 0]},
+                                   {"val": ["temp_data", "obs", "views", 0, "view", "size", 1]}]}),
+    ), cond={"!": OVER}),
+] + [
+    # ONE INFERENCE PER SEAT, and the whole reason the wave could go. `model` is computed, so this
+    # task is invisible to `models.preload` -- the roster clock tags every registration `ladder`
+    # and the replica's `models.preload_tags` warms them at boot instead.
+    #
+    # `continue_on_error` is what makes a competitor's failure THEIR failure: an adapter that
+    # throws, a graph that will not run, a call that outlives its deadline -- all of them leave
+    # `temp_data.p{i}` absent, which the decode below reads as "no action", which the engine plays
+    # as the no-op and this workflow counts as a strike.
+    task(f"infer{i}", f"Seat {i}'s move", {
+        "name": "model_infer",
+        "input": {
+            "model": {"val": ["data", "seats", i, "model"]},
+            "input": var(f"temp_data.v{i}"),
+            "output": f"temp_data.p{i}",
+            "raw": True,
+            "stats_output": f"temp_data.s{i}",
+            "timeout_ms": vars_("turn_ms"),
         },
+    }, cond=seat_plays(i), soft=True)
+    for i in range(MAX_SEATS)
+] + [
+    task("acts", "Decode each head, accumulate strikes and cost", mapping(
+        # The ants' flat indices, shared by every seat of this match because `mine` is per seat.
+        # Computed per seat, immediately before its decode, so the two cannot disagree.
+        *[(f"temp_data.a{i}", {"if": [
+            {"!": seat_plays(i)}, None,
+            {"map": [{"reduce": [
+                {"if": [var(f"temp_data.v{i}.mine"), var(f"temp_data.v{i}.mine"), []]},
+                {"merge": [var("accumulator"),
+                           [{"+": [{"*": [root("temp_data", "w"), var("current.0")]},
+                                   var("current.1")]}]]}, []]},
+                     var("")]}]})
+          for i in range(MAX_SEATS)],
+        *[(f"temp_data.idx", None)],
     ), cond=LIVE),
+]
 
-    task("acts", "Errors become the no-op; strikes accumulate", mapping(
-        # The explicit {m, seat, action} form, not the positional one: a forfeited seat is not sent
-        # to the loader, so the reply is shorter than the view list and positional alignment would
-        # land every action after the first forfeit in the wrong chair. Omission IS the no-op --
-        # the engine plays it for any seat it is given nothing for.
-        ("temp_data.acts", {"map": [var("temp_data.play.rows"),
-                                    {"m": var("ref.m"), "seat": var("ref.seat"),
-                                     "action": {"??": [var("action"), []]}}]}),
-        # The strikes come out of the same walk, because the reply is the only place a row's error
-        # and the identity of its seat are in the same object. Counted CUMULATIVELY: five missed
-        # clocks in a match, not five in a row -- the reading a competitor cannot game.
-        # The seed used to carry `strike_ceiling` in from [vars], because a root var read inside a
-        # sift body is null. The value is now on the ref, which IS element scope, so the seed has
-        # nothing left to carry.
+# The decode reads `temp_data.idx`, which is per seat: fold it into one task per seat so the index
+# list and the gather that consumes it are never a turn apart.
+MATCH_TASKS += [
+    task(f"act{i}", f"Seat {i}: the head, decoded", mapping(
+        ("temp_data.idx", var(f"temp_data.a{i}")),
+        (f"temp_data.act{i}", decode(i)),
+    ), cond=seat_plays(i))
+    for i in range(MAX_SEATS)
+]
+
+MATCH_TASKS += [
+    task("moves", "The turn's actions, and what they cost", mapping(
+        # The EXPLICIT {m, seat, action} form, never the positional one: a forfeited seat sends
+        # nothing at all, so a positional list would land every action after the first forfeit in
+        # the wrong chair. Omission IS the no-op -- the engine plays it for any seat it is given
+        # nothing for.
+        ("temp_data.acts", {"reduce": [
+            [*[{"seat": i, "action": var(f"temp_data.act{i}"),
+                "live": seat_plays(i)} for i in range(MAX_SEATS)]],
+            {"if": [{"and": [var("current.live"), var("current.action")]},
+                    {"merge": [var("accumulator"),
+                               [{"m": 0, "seat": var("current.seat"),
+                                 "action": var("current.action")}]]},
+                    var("accumulator")]},
+            []]}),
+        # A seat that was asked and answered nothing takes a strike. Counted CUMULATIVELY -- five
+        # missed clocks in a match, not five in a row -- which is the reading a competitor cannot
+        # game by failing every other turn.
+        ("temp_data.miss", [*[{"if": [{"and": [seat_plays(i), {"!": var(f"temp_data.act{i}")}]},
+                                      1, 0]} for i in range(MAX_SEATS)]]),
+        # FLOORED HERE, not at the finish: `inference_ms` is a float, `infer_us_total` and
+        # `infer_us_max` are a bigint and an int, and `jsonb_to_recordset` refuses `10051.542` for
+        # either. One conversion, at the one place milliseconds become microseconds.
+        ("temp_data.cost", [*[{"floor": [{"*": [1000, {"??": [var(f"temp_data.s{i}.inference_ms"),
+                                                             0]}]}]}
+                              for i in range(MAX_SEATS)]]),
+        ("temp_data.asked", [*[{"if": [seat_plays(i), 1, 0]} for i in range(MAX_SEATS)]]),
+        # Every root value the body needs rides in the accumulator: element scope cannot see root,
+        # and `{"==": [0, null]}` is TRUE under this engine's loose equality, so the mistake is
+        # silent rather than loud.
         ("temp_data.nr", sift(
-            var("temp_data.play.rows"), {}, element={
-                "m": var("current.ref.m"), "seat": var("current.ref.seat"),
-                "weights_hash": var("current.ref.weights_hash"),
-                "adapter_hash": var("current.ref.adapter_hash"),
-                # Carried forward, or it exists on turn 0 only: the next turn's forfeit test reads a
-                # null ceiling, `{">=": [n, null]}` is TRUE, every seat forfeits on turn 1, and on
-                # turn 2 an empty /play reaches `step` as "0 actions for N live seats".
-                "strike_ceiling": var("current.ref.strike_ceiling"),
-                "strikes": NEXT_STRIKES,
-                "forfeited": {"or": [var("current.ref.forfeited"),
-                                     {">=": [NEXT_STRIKES,
-                                             var("current.ref.strike_ceiling")]}]},
-                # A forfeited seat is absent from the next turn's play call, so these freeze at the
-                # last turn it was actually played -- which is why `infer_turns` is carried rather
-                # than matches.turns being reused as the divisor.
-                "infer_us_total": NEXT_INFER_TOTAL,
-                "infer_us_max": NEXT_INFER_MAX,
-                "infer_turns": NEXT_INFER_TURNS,
+            var("data.refs"),
+            {"miss": var("temp_data.miss"), "cost": var("temp_data.cost"),
+             "asked": var("temp_data.asked")},
+            element={
+                "m": 0, "seat": var("current.seat"),
+                "model": var("current.model"),
+                "weights_hash": var("current.weights_hash"),
+                "manifest_hash": var("current.manifest_hash"),
+                "strike_ceiling": var("current.strike_ceiling"),
+                "strikes": {"+": [var("current.strikes"),
+                                  {"val": ["accumulator", "miss", {"val": ["current", "seat"]}]}]},
+                "forfeited": {"or": [
+                    var("current.forfeited"),
+                    {">=": [{"+": [var("current.strikes"),
+                                   {"val": ["accumulator", "miss",
+                                            {"val": ["current", "seat"]}]}]},
+                            var("current.strike_ceiling")]}]},
+                # Microseconds, from the milliseconds `stats_output` reports. A seat that was not
+                # asked adds nothing, which is why `infer_turns` is carried rather than the match's
+                # turn count being reused as the divisor.
+                "infer_us_total": {"+": [
+                    var("current.infer_us_total"),
+                    {"val": ["accumulator", "cost", {"val": ["current", "seat"]}]}]},
+                "infer_us_max": {"max": [
+                    var("current.infer_us_max"),
+                    {"val": ["accumulator", "cost", {"val": ["current", "seat"]}]}]},
+                "infer_turns": {"+": [var("current.infer_turns"),
+                                      {"val": ["accumulator", "asked",
+                                               {"val": ["current", "seat"]}]}]},
             })),
-        ("temp_data.next_refs", var("temp_data.nr.items")),
-        # A forfeited seat is absent from the reply, so rebuilding the refs from the reply alone
-        # would drop its `forfeited` flag and send it to the loader again next turn. Carry it.
-        ("data.refs", {"merge": [var("temp_data.next_refs"),
-                                 {"filter": [var("data.refs"), var("forfeited")]}]}),
-        ("temp_data.struck", {"reduce": [
-            {"map": [var("temp_data.play.rows"), {"if": [var("action"), 0, 1]}]},
-            {"+": [var("accumulator"), var("current")]}, 0]}),
+        ("data.refs", var("temp_data.nr.items")),
+        ("data.struck", {"+": [var("data.struck"),
+                               {"reduce": [var("temp_data.miss"),
+                                           {"+": [var("accumulator"), var("current")]}, 0]}]}),
     ), cond=LIVE),
 
-    task("step", "Advance every live match by one turn", plugin(f"{ENGINE}.step", {
+    task("step", "Advance the match by one turn", plugin(f"{ENGINE}.step", {
         "wave_state": var("data.state"),
         "actions": var("temp_data.acts"),
         "output": "temp_data.st",
     }), cond=LIVE),
 
-    task("carry", "Carry the state, queue what ended", mapping(
+    task("carry", "Carry the state and the replay stream", mapping(
         ("data.state", var("temp_data.st.wave_state")),
         ("data.deltas", {"merge": [var("data.deltas"), var("temp_data.st.replay_delta")]}),
-        ("data.pending", {"merge": [var("data.pending"), var("temp_data.st.ended")]}),
-        # Strikes outlive the match they were earned in: the drain finishes one match per sweep, and
-        # by the second sweep `observe` returns nothing for a finished match. This is the only turn
-        # an ending match's seats still exist in the refs, so snapshot them now.
-        ("temp_data.dr", sift(var("data.refs"),
-                              {"ended": var("temp_data.st.ended")},
-                              {"in": [var("current.m"), var("accumulator.ended")]},
-                              items=var("data.done_refs"))),
-        ("data.done_refs", var("temp_data.dr.items")),
-        ("data.strikes", {"+": [var("data.strikes"), var("temp_data.struck")]}),
     ), cond=LIVE),
 
     # ------------------------------------------------------------------ renew
-    task("renew", "Extend the wave's lease", db(
+    task("renew", "Extend the lease", db(
         "db_write", K_RENEW, [var("data.token"), vars_("lease_seconds")], "temp_data.renewed",
     ), cond=DO_RENEW),
 
-    task("lost-unload", "The wave is not ours any more: release the models",
-         unload(var("data.models")), cond=RENEW_LOST),
     task("lost", "Halt: the lease was reaped under us", mapping(
         ("data.outcome", "lease_lost"),
     ), cond=RENEW_LOST, terminal=True),
 
-    # ------------------------------------------------------------------ the finish drain
-    # One ended match finished per sweep, from a queue. The alternative was K conditioned
-    # presign-PUT-finish triples in the task list: 3K condition evaluations every turn for a thing
-    # that fires once per match, against six tasks whatever K is.
+    # ------------------------------------------------------------------ the finish
+    #
+    # `observe` returns no view for a match that has ended, so the turn the view list empties is
+    # the turn the match is over. One match, so there is no drain and no queue: the finish runs
+    # once, in the sweep after the last turn.
     task("results", "Ranks, scores and an end reason", plugin(f"{ENGINE}.finish", {
-        # Called while matches are still running: the engine reports `done` per match and the drain
-        # reads only the head's entry, so it is safe.
         "wave_state": var("data.state"), "output": "temp_data.fin",
-    }), cond=PENDING),
+    }), cond=ENDED),
 
-    task("pick", "The head of the queue: its row, its result, its seats, its deltas", mapping(
-        ("temp_data.head", {"val": ["data", "pending", 0]}),
-        # `data.rows` is ordered by m and m is 0-based, so the index IS the match number.
-        ("temp_data.hrow", {"val": ["data", "rows", {"val": ["temp_data", "head"]}]}),
-        ("temp_data.hres", {"reduce": [
-            var("temp_data.fin.results"),
-            {"if": [IS_HEAD, {"head": var("accumulator.head"), "r": var("current")},
-                    var("accumulator")]},
-            {"head": var("temp_data.head"), "r": None}]}),
-        ("temp_data.hrefs", sift(var("data.done_refs"), HEAD, IS_HEAD)),
-        ("temp_data.hdeltas", sift(var("data.deltas"), HEAD, IS_HEAD)),
-        # THE RESULT, one element per seat. Forfeited seats rank last, and the rule is
-        # `engine_rank + seat_count` rather than "set them all to last", because two forfeited seats
-        # must not tie with a seat that played -- ranks need not be dense, and any order-preserving
-        # relabelling gives identical TrueSkill output. The engine's OWN ranks go in the replay
-        # envelope untouched, so an audit can still see what the game thought happened.
+    task("pick", "The result, one element per seat", mapping(
+        ("temp_data.res", {"val": ["temp_data", "fin", "results", 0]}),
+        # Forfeited seats rank last, and the rule is `engine_rank + seat_count` rather than "set
+        # them all to last", because two forfeited seats must not tie with a seat that played --
+        # ranks need not be dense, and any order-preserving relabelling gives identical TrueSkill
+        # output. The engine's OWN ranks go in the replay envelope untouched, so an audit can still
+        # see what the game thought happened.
         ("temp_data.seatrows", {"reduce": [
-            var("temp_data.hrefs.items"),
+            var("data.refs"),
             {"r": var("accumulator.r"),
              "n": var("accumulator.n"),
              "items": {"merge": [var("accumulator.items"), [{
@@ -648,157 +676,258 @@ TASKS = [
                  "infer_us_max": var("current.infer_us_max"),
                  "infer_turns": var("current.infer_turns"),
              }]]}},
-            {"r": var("temp_data.hres.r"), "n": var("temp_data.hrow.seat_count"), "items": []}]}),
-        # The key names the ATTEMPT, so a stale attempt's blob is an orphan under its own key rather
-        # than a replacement for the one that counted.
+            {"r": var("temp_data.res"), "n": var("data.row.seat_count"), "items": []}]}),
+        # The key names the ATTEMPT, so a stale attempt's blob is an orphan under its own key
+        # rather than a replacement for the one that counted.
         ("temp_data.key", {"cat": [vars_("replay_prefix"), "/",
-                                   var("temp_data.hrow.id"), "/",
+                                   var("data.row.id"), "/",
                                    var("data.token"), ".json"]}),
-    ), cond=PENDING),
+    ), cond=ENDED),
 
     task("presign", "Sign a PUT for this attempt's replay", {
         "name": "storage_presign",
         "input": {"connector": "kalam-blobs", "method": "PUT",
                   "key": var("temp_data.key"), "expires_in": "15m",
                   "output": "temp_data.signed"},
-    }, cond=PENDING),
+    }, cond=ENDED),
 
     task("put", "Write the replay envelope", http(
         "kalam-blobs-put", "PUT",
         {"substr": [var("temp_data.signed"), {"length": [vars_("blob_endpoint")]}]},
         "temp_data.putres", {
-            "match_id": var("temp_data.hrow.id"),
+            "match_id": var("data.row.id"),
             "attempt_token": var("data.token"),
-            "seed": var("temp_data.hrow.seed"),
-            "preset": var("temp_data.hrow.preset"),
-            # THE BOARD. A replay is self-sufficient or it is not viewable: `replay-decode` rebuilds
-            # the match from `map`, so a replay stays viewable when the preset table has been
-            # re-tuned or the catalogue has moved on. The engine emits it on the finish result of a
-            # match that has ENDED, which is the row being written here, so it costs no carried
-            # state.
-            "map_id": var("temp_data.hres.r.map_id"),
-            "map": var("temp_data.hres.r.map"),
-            # WHO SAT WHERE, by hash -- not identity, but enough that a replay can be RE-RUN and not
-            # merely watched: `tinybrains conform` rebuilds the match from this envelope alone and
-            # diffs the result against it, which is what keeps the local runner and this workflow
-            # telling the same story about the same seeds.
-            "seats": var("temp_data.hrefs.items"),
-            # The seed fixes food respawn and the map fixes the board; re-simulation needs the turn
-            # limit too, and it is a var rather than a column.
+            "seed": var("data.row.seed"),
+            "preset": var("data.row.preset"),
+            # THE BOARD. A replay is self-sufficient or it is not viewable: `replay-decode`
+            # rebuilds the match from `map`, so a replay stays viewable when the preset table has
+            # been re-tuned or the catalogue has moved on.
+            "map_id": var("temp_data.res.map_id"),
+            "map": var("temp_data.res.map"),
+            # WHO SAT WHERE, by hash -- not identity, but enough that a replay can be RE-RUN and
+            # not merely watched: `tinybrains conform` rebuilds the match from this envelope alone
+            # and diffs the result against it.
+            "seats": var("data.refs"),
             "max_turns": vars_("max_turns"),
-            # The ceiling this match was played under, at the TOP LEVEL and not only on the seats:
-            # `tinybrains conform` re-simulates from the envelope and reads no seat, so a ceiling
-            # carried only per seat would let it replay every match at its own default. Replays
-            # would conform cleanly until one of them had a forfeit.
-            "strike_ceiling": var("temp_data.hrow.strike_ceiling"),
+            "strike_ceiling": var("data.row.strike_ceiling"),
             "engine_digest": vars_("engine_digest"),
-            "evaluator_digest": var("temp_data.play.evaluator_digest"),
-            "dialect_version": var("temp_data.play.dialect_version"),
-            "engine_ranks": var("temp_data.hres.r.ranks"),   # before forfeits are applied
-            "scores": var("temp_data.hres.r.scores"),
-            "reason": var("temp_data.hres.r.reason"),
-            "turns": var("temp_data.hres.r.turns"),
-            "deltas": var("temp_data.hdeltas.items"),        # the action stream, not frames
+            # What ran the adapters. `evaluator_digest` named an axon build; this names the Orion
+            # whose expression engine and tract this match was played on, which is what a
+            # re-validation sweep is per (R10).
+            "orion_version": vars_("orion_version"),
+            "engine_ranks": var("temp_data.res.ranks"),   # before forfeits are applied
+            "scores": var("temp_data.res.scores"),
+            "reason": var("temp_data.res.reason"),
+            "turns": var("temp_data.res.turns"),
+            "deltas": var("data.deltas"),                 # the action stream, not frames
         },
         response_format="text",
-    ), cond=PENDING),
+    ), cond=ENDED),
 
     task("finish", "Finish the row -- one statement, on the token", db(
         "db_write", K_FINISH,
-        [var("data.token"), var("temp_data.hrow.id"), var("temp_data.seatrows.items"),
-         var("temp_data.hres.r.reason"), var("temp_data.hres.r.turns"),
+        [var("data.token"), var("data.row.id"), var("temp_data.seatrows.items"),
+         var("temp_data.res.reason"), var("temp_data.res.turns"),
          var("data.opened_at"), vars_("engine_digest"),
-         var("temp_data.play.evaluator_digest"), var("temp_data.key")],
+         vars_("orion_version"), var("temp_data.key")],
         "temp_data.wrote",
-    ), cond=PENDING),
+    ), cond=ENDED),
 
     task("counted", "Halt if the finish wrote nothing: the token is stale",
-         halt_unless(wrote("temp_data.wrote")), cond=PENDING),
+         halt_unless(wrote("temp_data.wrote")), cond=ENDED),
 
-    task("pop", "Drop the head, and its deltas with it", mapping(
-        ("data.pending", {"slice": [var("data.pending"), 1]}),
-        # The complement of `pick`'s filter, so the wave's delta stream shrinks as matches finish
-        # and never carries a finished match's history to the end of the run.
-        ("temp_data.dk", sift(var("data.deltas"), HEAD, IS_HEAD, keep=False)),
-        ("data.deltas", var("temp_data.dk.items")),
-        ("data.n_running", {"-": [var("data.n_running"), 1]}),
-        ("data.finished", {"+": [var("data.finished"), 1]}),
-    ), cond=PENDING),
+    task("done", "Mark the run complete", mapping(
+        ("data.finished", True),
+    ), cond=ENDED),
 
-    # ------------------------------------------------------------------ the end
-    task("unload", "Release the wave's models", unload(var("data.models")), cond=OVER),
-
-    task("over", "Every match played and every finish drained", mapping(
+    task("over", "Played and finished", mapping(
         ("data.outcome", "complete"),
         ("data.stopped_at_turn", var("temp_data.i")),
     ), cond=OVER, terminal=True),
 ]
 
 
+# ======================================================================= tb-roster
+
+ROSTER_TASKS = [
+    task("roster", "What the ladder says this node should be able to play", db(
+        "db_read", R_ROSTER, [vars_("model_prefix")], "temp_data.rst",
+    ), cond=TURN0),
+
+    task("more", "Stop when the roster runs out",
+         halt_unless({"<": [var("temp_data.i"), var("temp_data.rst.0.body.n")]})),
+
+    task("item", "Take version i, and clear the last one", mapping(
+        ("temp_data.it", {"val": ["temp_data", "rst", 0, "body", "items",
+                                  {"val": ["temp_data", "i"]}]}),
+        # temp_data survives a sweep, so every per-item slot is cleared here: a task skipped this
+        # time round would otherwise be read at the PREVIOUS item's value, and the one that matters
+        # decides whether this item is registered at all.
+        ("temp_data.have", None),
+        ("temp_data.made", None),
+        ("temp_data.activated", None),
+    )),
+
+    task("have", "Does this node know it already?", admin(
+        "GET", {"cat": ["/models/", var("temp_data.it.model")]}, "temp_data.have",
+    ), soft=True),
+
+    # A registration carries the manifest, the reference and the digest -- never the bytes. The
+    # node fetches the object through the connector and re-hashes it, so a row that lies about its
+    # digest fails admission here rather than playing something else.
+    #
+    # `tags` is what makes a computed `model` warmable: `models.preload` reads the LITERAL model of
+    # each active workflow's tasks and tb-match names its model with a var, so `preload_tags` is
+    # the only mode that fits this shape (Orion 1.8.1, #329).
+    task("register", "Register it here", admin(
+        "POST", "/models", "temp_data.made", {
+            "manifest": var("temp_data.it.manifest"),
+            "artifact": {"connector": vars_("models_bucket_connector"),
+                         "key": var("temp_data.it.key"),
+                         "digest": var("temp_data.it.digest")},
+            "tags": ["ladder"],
+        },
+    ), cond={"!": var("temp_data.have.data.model_id")}, soft=True),
+
+    # Admission is asynchronous and this clock is a reconciler: it does ONE step per item per tick,
+    # so a model registered this tick is activated on a later one. There is no poll loop, no
+    # timeout to tune, and a node that restarts mid-admission simply catches up.
+    task("activate", "Activate what has passed", admin(
+        "PATCH", {"cat": ["/models/", var("temp_data.it.model"), "/status"]},
+        "temp_data.activated", {"status": "active"},
+    ), cond={"and": [{"===": [var("temp_data.have.data.admission.state"), "passed"]},
+                     {"!==": [var("temp_data.have.data.status"), "active"]}]}, soft=True),
+]
+
+
 # ======================================================================= the documents
 
-WAVE = {
-    "workflow_id": "tb-wave-run",
-    "name": "Kalam: one wave, turn by turn",
+MATCH = {
+    "workflow_id": "tb-match-run",
+    "name": "Kalam: one match, turn by turn",
     "description": (
-        "Claim up to K pending rows on this replica's engine digest, hold their models in the "
-        "loader beside it, and play them turn-synchronously: observe -> one play call -> step. "
-        "Each row is finished AS ITS MATCH ENDS, one per sweep from a queue, with its replay under "
-        "a key naming the attempt. Every statement is conditioned on the claim token, so a stale "
-        "attempt updates nothing. It reads no rating and writes no rating, and its database role "
-        "cannot reach one. On SIGTERM Orion stops claiming and lets the wave in hand finish inside "
-        "cron.shutdown_timeout_secs. docs/design.md; the statements are soma/docs/schema.md §4."
+        "Claim ONE queued row on this replica's engine digest and play it: observe, one "
+        "`model_infer` per live seat, step, until the engine stops returning views. The row is "
+        "finished in place, with its replay under a key naming the attempt. Every statement is "
+        "conditioned on the claim token, so a stale attempt updates nothing. It reads no rating "
+        "and writes no rating, and its database role cannot reach one. The wave it replaces "
+        "existed to amortise one batched inference call across many seats -- a number that is two "
+        "on every Ants map (decision R7). On SIGTERM Orion stops claiming and lets the match in "
+        "hand finish inside cron.shutdown_timeout_secs. docs/design.md; the statements are "
+        "soma/docs/schema.md §4."
     ),
     "tags": ["pkg:kalam"],
     "condition": True,
-    # max_turns + K: the drain finishes one match per sweep, so a wave whose matches all end on the
-    # last turn needs K more sweeps to empty its queue.
-    "loop": {"counter": "i", "max": 1100},
-    "tasks": TASKS,
+    # One sweep per turn, plus the sweep that finishes. `max_turns` is the game's bound and this is
+    # the runaway bound above it.
+    "loop": {"counter": "i", "max": 1010},
+    "tasks": MATCH_TASKS,
 }
 
-CHANNEL = {
-    "channel_id": "tb-wave",
-    "name": "tb-wave",
+ROSTER = {
+    "workflow_id": "tb-roster-run",
+    "name": "Kalam: reconcile this node's model set",
+    "description": (
+        "Every version the ladder says is verified or active, registered, admitted and activated "
+        "ON THIS NODE. Models are a state-database entity and each replica is its own Orion with "
+        "its own state database (decision 41), so a roster is per node -- and a clock that "
+        "reconciles from the shared schema needs no replica list anywhere, which is what keeps "
+        "Jodi from ever calling a replica (decision R8). One step per item per tick: registration "
+        "queues admission, and a later tick activates what passed. Nothing here writes to the "
+        "platform schema; its database role has SELECT and nothing else on model_versions."
+    ),
+    "tags": ["pkg:kalam"],
+    "condition": True,
+    "loop": {"counter": "i", "max": 256},
+    "tasks": ROSTER_TASKS,
+}
+
+MATCH_CHANNELS = [
+    {
+        "channel_id": f"tb-match-{n}",
+        "name": f"tb-match-{n}",
+        "tags": ["pkg:kalam"],
+        "channel_type": "async",
+        "protocol": "cron",
+        "workflow_id": "tb-match-run",
+        "transport_config": {
+            "schedule": "*/5 * * * * *",
+            "timezone": "UTC",
+            # A poll missed while a match was running has nothing to catch up: the queue is still
+            # there and the next tick claims from it.
+            "misfire_policy": "skip",
+            # `forbid` on a key PER CHANNEL, and the key is local in effect: Kalam's Orion runs on
+            # local SQLite with no shared state, so the lock is per replica. One match in flight
+            # per channel, N channels per replica, N replicas in parallel -- and the claim's
+            # `FOR UPDATE SKIP LOCKED` is what keeps them off each other's rows.
+            "concurrency": {"policy": "forbid", "key": f"match-{n}"},
+        },
+        "config": {
+            # Above the longest match: max_turns x turn_ms plus the platform's own time.
+            "timeout_ms": 2400000,
+            # A thousand-turn match is thousands of task executions in one occurrence, and tracing
+            # a clean one writes more trace than match.
+            "tracing": {"errors_only": True, "task_details": True},
+        },
+    }
+    for n in range(1, 5)
+]
+
+ROSTER_CHANNEL = {
+    "channel_id": "tb-roster",
+    "name": "tb-roster",
     "tags": ["pkg:kalam"],
     "channel_type": "async",
     "protocol": "cron",
-    "workflow_id": "tb-wave-run",
+    "workflow_id": "tb-roster-run",
     "transport_config": {
-        "schedule": "*/5 * * * * *",
+        "schedule": "*/15 * * * * *",
         "timezone": "UTC",
-        # A poll missed while a wave was running has nothing to catch up: the queue is still there
-        # and the next tick claims from it.
         "misfire_policy": "skip",
-        # `forbid` on key `wave`, and the key is LOCAL in effect: Kalam's Orion runs on local SQLite
-        # with no shared state, so the lock is per replica -- one wave in flight per replica, N
-        # replicas in parallel. The opposite of Jodi's use of the identical spelling.
-        "concurrency": {"policy": "forbid", "key": "wave"},
+        "concurrency": {"policy": "forbid", "key": "roster"},
     },
     "config": {
-        # Above the longest match: max_turns x turn_ms plus the platform's own time and the drain's
-        # tail.
-        "timeout_ms": 2400000,
-        # A thousand-turn wave is thousands of task executions in one occurrence, and tracing a
-        # clean one writes more trace than match.
+        "timeout_ms": 120000,
         "tracing": {"errors_only": True, "task_details": True},
     },
 }
 
 
-def write(path: pathlib.Path, doc: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(doc, indent=2, ensure_ascii=False) + "\n")
-    print(f"    {path.relative_to(PKG)}")
+def outputs() -> list[tuple[pathlib.Path, dict]]:
+    out = [(PKG / "workflows" / f"{MATCH['workflow_id']}.json", MATCH),
+           (PKG / "workflows" / f"{ROSTER['workflow_id']}.json", ROSTER),
+           (PKG / "channels" / f"{ROSTER_CHANNEL['channel_id']}.json", ROSTER_CHANNEL)]
+    out += [(PKG / "channels" / f"{c['channel_id']}.json", c) for c in MATCH_CHANNELS]
+    return out
 
 
-def main() -> None:
-    print("==> workflows")
-    write(PKG / "workflows" / f"{WAVE['workflow_id']}.json", WAVE)
-    print("==> channels")
-    write(PKG / "channels" / f"{CHANNEL['channel_id']}.json", CHANNEL)
-    print(f"    {len(TASKS)} tasks, loop max {WAVE['loop']['max']}")
+def render(doc: dict) -> str:
+    return json.dumps(doc, indent=2, ensure_ascii=False) + "\n"
+
+
+def main(check: bool) -> int:
+    drift = []
+    for path, doc in outputs():
+        text = render(doc)
+        if check:
+            if not path.exists() or path.read_text() != text:
+                drift.append(path)
+            continue
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+        print(f"    {path.relative_to(PKG)}")
+    if check:
+        for path in drift:
+            print(f"drift: {path.relative_to(PKG)} differs from the generator", file=sys.stderr)
+        if drift:
+            return 1
+        print("==> generated files are current")
+        return 0
+    print(f"    tb-match: {len(MATCH_TASKS)} tasks, loop max {MATCH['loop']['max']}, "
+          f"{len(MATCH_CHANNELS)} channels")
+    print(f"    tb-roster: {len(ROSTER_TASKS)} tasks")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main("--check" in sys.argv[1:]))
