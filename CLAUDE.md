@@ -36,18 +36,37 @@ HTTP call this package makes is to **its own node's admin API**, which is where 
 
 ## Commands
 
+
 ```sh
 python3 scripts/gen-kalam.py               # regenerate the workflows + channels (build output)
 python3 scripts/gen-kalam.py --check       # fail if what is on disk drifted from the generator
+./scripts/check-defs.sh                    # drift + lint + clippy + fmt, all --deny-warnings; no stack
 ./scripts/check-sql.sh                     # PREPARE every shipped statement + assert the role's grants
                                            # (including the roster's column-level read of model_versions)
 KALAM_ALLOW_PRIVATE_URLS=1 R2_ENDPOINT=http://minio:9000 ./scripts/load-package.sh
 docker build -t tinybrains/kalam:dev .     # the artifact image -- the package that actually ships
 
-# lint needs the PINNED 1.8.1 binary. `orion-server` on the host is often older and reports
-# misleading schema errors; every replica mounts the package volume, so:
-docker exec tinybrains-kalam-1-1 orion-server lint /pkg/kalam --deny-warnings
+# check-defs.sh asserts orion-server is 1.8.x before it runs anything, because an older one reports
+# misleading schema errors on definitions that are correct. If the host binary is old, every replica
+# mounts the package volume and carries the right one:
+docker exec tinybrains-kalam-1-1 orion-server clippy /pkg/kalam --deny-warnings
 ```
+
+**The four `tb-match-N` channels differ in `channel_id` and `concurrency.key` and nothing else.**
+That is the whole of what makes them separate lanes: `forbid` on a per-channel key gives one match
+in flight per lane, N lanes per replica. One channel with `policy: "allow"` would be unbounded, so
+the lanes are the bound and not an accident. Their shared `config` is declared once, in
+`shared/kalam.json`.
+
+**`group_runs()` in the generator collapses each run of consecutive tasks sharing one condition
+into a task group**, which carries the condition once instead of per member — what
+`orion-server clippy` reports as `perf.redundant_step_condition`. A group's condition is evaluated
+once on entry and a falsy result skips the span *without evaluating the members' conditions*, which
+is what makes stripping them from the members equivalent rather than merely similar.
+
+**Shared values live in `shared/kalam.json`**, a shared document the admin API does not accept, so
+the set must be **compiled** before it is applied — which is what `load-package.sh` now does, with
+`orion-server compile` followed by `orion-server package apply`.
 
 `check-sql.sh` needs Docker and a running `tinybrains-db-1`; it reads Soma's migrations from
 `../soma/migrations` (`MIGRATIONS` overrides) and recreates a `kalam_sqlcheck` scratch database.

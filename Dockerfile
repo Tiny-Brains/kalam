@@ -43,13 +43,14 @@ LABEL org.opencontainers.image.title="kalam package" \
       org.opencontainers.image.description="the wave channel, its workflow and connectors, and the cartridge component it executes"
 
 COPY connectors/             /artifacts/connectors/
-COPY scripts/load-package.sh /artifacts/scripts/
+COPY shared/                 /artifacts/shared/
+COPY scripts/load-package.sh scripts/stage-set.py /artifacts/scripts/
 COPY --from=declarations /src/channels/  /artifacts/channels/
 COPY --from=declarations /src/workflows/ /artifacts/workflows/
 
 # cartridge.json is not Orion's: it is the registration manifest the platform reads for presets,
 # limits and budgets, and it travels with the component rather than being retyped into [vars].
-COPY --from=ants /artifacts/tb-ants.wasm /artifacts/plugin.json /artifacts/cartridge.json /artifacts/plugins/tb-ants/
+COPY --from=ants /artifacts/tb-ants.wasm /artifacts/plugin.json /artifacts/cartridge.json /artifacts/plugin.toml /artifacts/plugins/tb-ants/
 
 # `docker run --rm -v kalam-pkg:/out tinybrains/kalam:dev` populates a volume with the whole package.
 CMD ["sh", "-c", "cp -a /artifacts/. /out/"]

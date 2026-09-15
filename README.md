@@ -188,6 +188,20 @@ scripts/load-package.sh      replacement of objects tagged pkg:kalam
 
 ## Status
 
+**15 September 2026 — the definitions say each thing once.** `shared/kalam.json` holds the clock
+tracing block the five channels copied and the `config` all four `tb-match-N` lanes share — the
+lanes now differ in `channel_id` and `concurrency.key` and nothing else, which is the whole of what
+makes them separate lanes. The generator gained `group_runs()`, which collapses each run of
+consecutive tasks sharing one condition into a task group carrying it once, and the no-op
+`terminal` on the last step is gone. `orion-server clippy` went from 9 findings to 0.
+
+`scripts/load-package.sh` is now `orion-server compile` + `orion-server package apply`; its sweep
+skips any kind the artifact has none of, **which this package is the reason for** — the cartridge
+comes from ants' image, so a checkout with no `plugins/` compiles to an artifact with no plugins,
+and an unguarded sweep would delete `tb.ants`. New: `scripts/check-defs.sh`, the no-stack gate.
+Verified on both live replicas: `tb.ants` loaded, 5 cron channels, 0 quarantined, and the engine
+digest agreeing across `games.active_engine_digest`, the live season and both nodes.
+
 **14 September 2026 — the wave is gone, and so is Axon.** This package is two clocks now:
 `tb-match` claims one row and plays it with one `model_infer` per seat, and `tb-roster` keeps this
 node's model set in step with `model_versions`. Orion 1.8.1's `models` entity is what Axon was — it

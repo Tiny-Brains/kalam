@@ -752,10 +752,12 @@ MATCH_TASKS += [
         ("data.finished", True),
     ), cond=ENDED),
 
+    # No `terminal`: this is the last step, so the flag would do nothing but suggest the list is
+    # guarded when it is not. `orion-server clippy` reports one as style.terminal_on_last_step.
     task("over", "Played and finished", mapping(
         ("data.outcome", "complete"),
         ("data.stopped_at_turn", var("temp_data.i")),
-    ), cond=OVER, terminal=True),
+    ), cond=OVER),
 ]
 
 
@@ -874,13 +876,9 @@ MATCH_CHANNELS = [
             # `FOR UPDATE SKIP LOCKED` is what keeps them off each other's rows.
             "concurrency": {"policy": "forbid", "key": f"match-{n}"},
         },
-        "config": {
-            # Above the longest match: max_turns x turn_ms plus the platform's own time.
-            "timeout_ms": 2400000,
-            # A thousand-turn match is thousands of task executions in one occurrence, and tracing
-            # a clean one writes more trace than match.
-            "tracing": {"errors_only": True, "task_details": True},
-        },
+        # Identical across all four lanes, so it is declared once. The lanes differ ONLY in
+        # channel_id and concurrency.key -- that is the whole of what makes them separate lanes.
+        "config": {"$from": "constants.match_channel_config"},
     }
     for n in range(1, 5)
 ]
@@ -900,14 +898,64 @@ ROSTER_CHANNEL = {
     },
     "config": {
         "timeout_ms": 120000,
-        "tracing": {"errors_only": True, "task_details": True},
+        "tracing": {"$from": "constants.clock_tracing"},
     },
 }
 
 
+def group_runs(tasks: list) -> list:
+    """Collapse a run of consecutive tasks sharing one condition into a task group.
+
+    The match loop is mostly runs of steps guarded by the same `first_sweep`-style condition, and
+    written flat each one re-evaluates it once per member -- `orion-server clippy` reports every
+    such run as perf.redundant_step_condition. A group carries the condition ONCE, on entry: a
+    falsy result skips the span WITHOUT evaluating the members' conditions, which is what makes
+    stripping them from the members equivalent rather than merely similar.
+
+    A run holding a `terminal` member is left alone: terminal is about position, and a group's own
+    terminal covers the whole span, so folding one in would move where the workflow ends.
+    """
+    out, i = [], 0
+    while i < len(tasks):
+        cond = tasks[i].get("condition")
+        j = i
+        if cond is not None and not tasks[i].get("terminal"):
+            # A terminal member ends the run and is folded in, because `terminal` on a group ends
+            # the workflow after the whole span -- identical when it is the last member, and only
+            # then. A terminal step anywhere earlier would move where the workflow ends, so the
+            # run stops before it.
+            while (j + 1 < len(tasks) and tasks[j + 1].get("condition") == cond):
+                j += 1
+                if tasks[j].get("terminal"):
+                    break
+        if j > i:
+            members = []
+            for t in tasks[i:j + 1]:
+                t = dict(t)
+                t.pop("condition")
+                members.append(t)
+            # Canonical key order for a group: id, name, description, condition, terminal, tasks.
+            group = {"id": f"when_{members[0]['id']}", "condition": cond}
+            if members[-1].pop("terminal", None):
+                group["terminal"] = True
+            group["tasks"] = members
+            out.append(group)
+        else:
+            out.append(tasks[i])
+            j = i
+        i = j + 1
+    return out
+
+
+def grouped(doc: dict) -> dict:
+    doc = dict(doc)
+    doc["tasks"] = group_runs(doc["tasks"])
+    return doc
+
+
 def outputs() -> list[tuple[pathlib.Path, dict]]:
-    out = [(PKG / "workflows" / f"{MATCH['workflow_id']}.json", MATCH),
-           (PKG / "workflows" / f"{ROSTER['workflow_id']}.json", ROSTER),
+    out = [(PKG / "workflows" / f"{MATCH['workflow_id']}.json", grouped(MATCH)),
+           (PKG / "workflows" / f"{ROSTER['workflow_id']}.json", grouped(ROSTER)),
            (PKG / "channels" / f"{ROSTER_CHANNEL['channel_id']}.json", ROSTER_CHANNEL)]
     out += [(PKG / "channels" / f"{c['channel_id']}.json", c) for c in MATCH_CHANNELS]
     return out
