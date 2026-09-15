@@ -188,6 +188,23 @@ scripts/load-package.sh      replacement of objects tagged pkg:kalam
 
 ## Status
 
+**15 September 2026 — the match lanes stop recording task detail.** `task_details` is `false` on
+`match_channel_config`, and that one flag was costing a replica ~11 GiB. It made every cron run
+capture a full `ExecutionTrace`, whose `changes` — the old **and** new value of every write — is
+built outside `max_snapshot_bytes`: that budget covers `snapshots` and `mapping_contexts` and
+nothing else. A match writes a `[1,5,H,W]` policy tensor per seat per turn and re-writes
+`data.state` and `data.deltas` beside it, across all 1010 sweeps, so one match's trace serialized to
+287 MB at the median and 1.98 GB at the worst. `errors_only` saves none of it: the trace is built,
+then serialized, and only then dropped. Measured 28.6 GB of trace JSON per 15 minutes and 11.1 GiB
+RSS on the replica that was playing, against 98 MiB on the idle one running the same image. After:
+no match trace warning since the reload, and a peak of 1.5 GiB across four concurrent lanes.
+
+`tb-roster` keeps its detail — 34 sweeps and no tensors. Two things this did **not** fix, both
+worth their own change: `Message.audit_trail` accumulates the same old+new values per task
+execution no matter what, because `capture_changes` defaults to `true` and Orion exposes no knob
+for it; and the loop still runs all 1010 sweeps after the game has ended, which on a 333-turn
+standard match is most of them.
+
 **15 September 2026 — the definitions say each thing once.** `shared/kalam.json` holds the clock
 tracing block the five channels copied and the `config` all four `tb-match-N` lanes share — the
 lanes now differ in `channel_id` and `concurrency.key` and nothing else, which is the whole of what
