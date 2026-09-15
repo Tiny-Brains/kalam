@@ -129,8 +129,8 @@ honest. A change to any of them here is a change there.
 
 - **A generator run that never reached the image ships a stale package**, and nothing at runtime
   notices. `check-sql.sh` reads the JSON on disk; the image regenerates it, so the two agree only if
-  you rebuild. After editing anything here: `docker compose build kalam-artifacts && docker compose
-  run --rm --no-deps kalam-artifacts` — a package volume holds the package's own scripts too, so a
+  you rebuild. After editing anything here: `docker compose --profile build build kalam-pkg` —
+  devops mounts this package straight from its image, so a
   stale volume fails like a bug in the change you just made.
 - **`engine_digest` must equal the component's sha256 and `games.active_engine_digest`.** The claim
   filters on it, so a mismatch is not an error anywhere — the replica claims nothing, for ever, and
