@@ -26,8 +26,8 @@ The SQL and JSONLogic are unreadable inline in JSON and readable in the generato
 there and it inlines them. `--check` fails if what is on disk has drifted; the Dockerfile runs it.
 
 `docs/design.md` is the specification and `soma/docs/schema.md` §4 owns the statements. Where this
-repo and those documents disagree, say so and fix one of them; update `README.md`'s Status block and
-`../design/tracker.md` when work lands.
+repo and those documents disagree, say so and fix one of them; update `README.md`'s Status block
+when work lands.
 
 Ownership is strict: Kalam owns **execution only**. Jodi owns every competitive decision (admission,
 pairing, rating, promotion), Soma owns the schema and the public routes, Ants owns the rules, Orion
