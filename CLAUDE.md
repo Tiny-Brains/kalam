@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 `kalam` ships **no server code**. It is an Orion **1.8.1** package — two cron workflows, five
-channels, five connectors, and the Ants wasm component — loaded into an orion-server that DevOps
+channels, six connectors, and the Ants wasm component — loaded into an orion-server that DevOps
 owns. Two clocks since the 1.8.1 rebuild (devops/docs/decisions.md, the R-series):
 
 - **`tb-match`** claims ONE queued row and plays it: `observe` → one `model_infer` per live seat →
@@ -21,6 +21,31 @@ owns. Two clocks since the 1.8.1 rebuild (devops/docs/decisions.md, the R-series
 There is no Axon sidecar, no residency barrier and no `/play`: Orion's own `models` entity fetches
 the artifact from the bucket by digest and runs it under `tract`.
 
+**Two modes, one task list — and in `api` mode the statements are not in this repo.** `KALAM_MODE`
+decides how a replica reaches the queue. `db` runs the eight statements (reap, claim, row, start,
+release, renew, finish, roster) here, over `kalam-db` on the `kalam` role. `api` holds no database
+credential and calls **Soma's runner gate** instead — `/v1/runner/*`, one route per statement, in
+`soma/workflows/soma-runner-*.json` — and skips the reap, which the gate runs once at the centre.
+Both paths are tasks in the same list, gated on the mode, and they meet at `data.ct`, the execution
+contract: built from `[vars]` in `db`, read off the claim in `api`, where it comes from the row's own
+season. Nothing below that line knows which mode it is in, and `tinybrains conform` has proved both
+play the same match. Three things follow:
+
+- **The `db` copies are a rollback, and nothing compares them with Soma's.** They leave when the
+  `api` path has soaked (N10, `devops/docs/decisions.md` §5). Until then a change to one of the eight
+  statements is made in both repositories, or the two modes quietly play by different rules.
+- **The gate's request field names are the contract**, not the column names or this generator's
+  variable names. `finish` binds `data.req.result` and `data.req.engine_digest`; sending `seats` and
+  `engine_digest_played` bound two nulls and answered `409 claim_lost`. `grep data.req.` in the route
+  before changing a body here.
+- **A renew's two failures differ in `api` mode.** `applied: false` means the claim is gone and the
+  run halts; a call that never arrived means almost nothing and the match plays on — the gate clamps
+  `renew_every_n_turns` so the lease has ~10× the interval of headroom, and a claim that really was
+  lost is refused at finish. `RENEW_LOST` in the generator is that rule; do not collapse it.
+
+`devops/docs/architecture.md` §3a is the system-level picture and `devops/docs/deployment.md` §11
+the operator's page for a runner on a machine the deployment does not own.
+
 **`scripts/gen-kalam.py` is the source; `workflows/*.json` and `channels/*.json` are build output.**
 The SQL and JSONLogic are unreadable inline in JSON and readable in the generator, so they live
 there and it inlines them. `--check` fails if what is on disk has drifted; the Dockerfile runs it.
@@ -31,8 +56,10 @@ when work lands.
 
 Ownership is strict: Kalam owns **execution only**. Jodi owns every competitive decision (admission,
 pairing, rating, promotion), Soma owns the schema and the public routes, Ants owns the rules, Orion
-owns inference. The packages coordinate through Postgres and never call each other — and the one
-HTTP call this package makes is to **its own node's admin API**, which is where its model set lives.
+owns inference. The packages coordinate through Postgres and never call each other. In `db` mode
+the one HTTP call this package makes is to **its own node's admin API**, which is where its model set
+lives; in `api` mode it also calls Soma's runner gate, which runs the same statements and
+coordinates nothing.
 
 ## Commands
 
@@ -77,10 +104,12 @@ neither exercises leases or turn execution. A real match needs the DevOps stack.
 
 ## Architecture
 
-**Everything is fenced on one claim token.** `token` mints a uuid before the claim; every statement
-afterwards carries `claim_token = ($1)::uuid`, so a replica whose lease was reaped writes nothing
-anywhere. `db_write` returns only `rows_affected`, which is how a fenced statement learns its fate —
-`wrote()` in the generator, and `halt_unless` on it.
+**Everything is fenced on one claim token.** In `db` mode `token` mints a uuid before the claim; in
+`api` mode the gate mints it and answers with it on `claim.token`. Every statement afterwards carries
+`claim_token = ($1)::uuid`, so a replica whose lease was reaped writes nothing anywhere. `db_write`
+returns only `rows_affected`, which is how a fenced statement learns its fate — `wrote()` in the
+generator, and `halt_unless` on it; through the gate the route answers the same fact as a field
+(`applied`, `started`).
 
 **Element scope does not nest inside root scope.** Inside a `map`/`filter`/`reduce` body,
 `{"var": "data.x"}` and `{"var": "metadata.vars.x"}` are `null`, and `{"==": [0, null]}` is **true**

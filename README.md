@@ -222,11 +222,12 @@ each, came back **IDENTICAL — every field, and all 1000 turns of the action st
 re-play. That is the only test that can tell whether moving the claim to HTTP changed how a match is
 *played* rather than how it is *recorded*.
 
-**Three things this turned up**, all in `devops/docs/design-plan.md` phase 2: the gate's idle answer
-had to stop being a bodyless `204`, because `http_call` parses every response as JSON; the replay
-bucket needed a *third* address, because SigV4 signs the host and the gate must sign for the one the
-runner dials; and **a route's request field names are the contract** — sending `seats` where the
-route binds `result` produced a `409 claim_lost`, naming the one thing that was fine.
+**Three things this turned up**, each now recorded where it bites — `devops/docs/decisions.md` N9,
+the platform guide, and this repo's `CLAUDE.md`: the gate's idle answer had to stop being a bodyless
+`204`, because `http_call` parses every response as JSON; the replay bucket needed a *third*
+address, because SigV4 signs the host and the gate must sign for the one the runner dials; and **a
+route's request field names are the contract** — sending `seats` where the route binds `result`
+produced a `409 claim_lost`, naming the one thing that was fine.
 
 **15 September 2026 — the match lanes stop recording task detail.** `task_details` is `false` on
 `match_channel_config`, and that one flag was costing a replica ~11 GiB. It made every cron run

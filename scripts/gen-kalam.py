@@ -334,7 +334,7 @@ SELECT json_build_object(
 # BOTH PATHS ARE IN ONE TASK LIST, gated on these two conditions, because the list is fixed and
 # there is no other way to carry a dual path -- and a dual path is what lets this land on `main`
 # without a cutover. Every `api` task is `soft`, so a call that fails leaves its slot unset and the
-# next task decides what that means; §4.3 of devops/docs/design.md is why that distinction matters
+# next task decides what that means; devops/docs/decisions.md §4b is why that distinction matters
 # over a WAN and did not over a compose bridge.
 #
 # The two paths MEET at `data.ct`, the execution contract. In `api` it is what the claim answered;
@@ -353,7 +353,7 @@ T0_DB = {"and": [TURN0, MODE_DB]}
 T0_API = {"and": [TURN0, MODE_API]}
 
 # CLAIMED IS NORMALISED, not read from either call: `db_write` answers rows_affected and the route
-# answers a body or a 204, so the two cannot share a test. `open` sets this once and every later
+# answers a body that is either a claim or `{"idle": true}`, so the two cannot share a test. `open` sets this once and every later
 # condition reads it.
 NOT_CLAIMED = {"and": [TURN0, {"!": var("data.claimed")}]}
 NOT_READY = {"and": [TURN0, {">": [var("temp_data.n_missing"), 0]}]}
