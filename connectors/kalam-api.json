@@ -1,0 +1,13 @@
+{
+  "id": "kalam-api",
+  "name": "kalam-api",
+  "connector_type": "http",
+  "tags": ["pkg:kalam"],
+  "config": {
+    "type": "http",
+    "url": "http://soma:8080",
+    "headers": { "content-type": "application/json", "user-agent": "kalam-runner" },
+    "retry": { "max_retries": 3, "retry_delay_ms": 500 },
+    "timeout_ms": 15000
+  }
+}

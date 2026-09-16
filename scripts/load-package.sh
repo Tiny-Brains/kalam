@@ -44,6 +44,22 @@ curl_admin() {
 # `endpoint` takes env:// happily, which is why kalam-blobs can and these cannot.
 PRIVATE=$([ "${KALAM_ALLOW_PRIVATE_URLS:-0}" = "1" ] && echo true || echo false)
 
+# `kalam-api` IS THE ONE THAT MATTERS OFF-SITE. The others address things inside the deployment, so
+# a private address is the normal case for them; this one addresses the platform from wherever the
+# runner is, and a runner that will follow a redirect into a private network is the wrong side of
+# Orion's S6 posture to be on. Leave KALAM_ALLOW_PRIVATE_URLS unset anywhere the runner is not on
+# the compose bridge -- devops/scripts/check/configs.sh asserts exactly that.
+
+# EXCEPT `kalam-orion`, WHICH IS ALWAYS PRIVATE AND MUST BE. It is THIS NODE'S OWN admin API -- the
+# roster clock registering and activating a model on the machine it is already running on -- and on
+# a standalone runner that address is `127.0.0.1:8080`, which Orion's guard counts as private
+# (127/8 is loopback, ssrf.rs). So one variable for all six cannot express a runner's posture: it
+# needs `kalam-api` refusing private addresses AND `kalam-orion` permitted one, at the same time.
+# Driving this off KALAM_ALLOW_PRIVATE_URLS would mean an off-site runner whose roster clock cannot
+# reach itself, and a roster that never catches up is a runner that refuses every seat.
+#
+# The guard is about egress to somewhere else. A node calling itself is not that.
+
 echo "==> staging the set"
 VERSION=$(python3 scripts/stage-set.py . "$STAGE" \
   "kalam-db=allow_private_urls=$PRIVATE" \
@@ -51,8 +67,10 @@ VERSION=$(python3 scripts/stage-set.py . "$STAGE" \
   "kalam-blobs=allow_private_urls=$PRIVATE" \
   "kalam-blobs-put=allow_private_urls=$PRIVATE" \
   "kalam-blobs-put=url=${R2_ENDPOINT:-}" \
-  "kalam-orion=allow_private_urls=$PRIVATE" \
-  "kalam-orion=url=${KALAM_ORION_ADMIN:-$ADMIN}")
+  "kalam-orion=allow_private_urls=true" \
+  "kalam-orion=url=${KALAM_ORION_ADMIN:-$ADMIN}" \
+  "kalam-api=allow_private_urls=$PRIVATE" \
+  "kalam-api=url=${KALAM_API_URL:-http://soma:8080}")
 
 echo "==> compiling kalam@$VERSION"
 if ! out=$(orion-server compile "$STAGE" --name kalam --version "$VERSION" -o "$ARTIFACT" 2>&1); then

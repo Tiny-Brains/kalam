@@ -4,6 +4,20 @@
     "match_channel_config": {
       "timeout_ms": 2400000,
       "tracing": { "errors_only": true, "task_details": false }
+    },
+    "runner_token_call": {
+      "connector": "kalam-api",
+      "method": "POST",
+      "path": "/v1/runner/token",
+      "body": {
+        "key": { "var": "metadata.vars.runner_key" },
+        "label": { "var": "metadata.vars.runner_label" },
+        "arch": { "var": "metadata.vars.arch" },
+        "engine_digest": { "var": "metadata.vars.engine_digest" },
+        "orion_version": { "var": "metadata.vars.orion_version" },
+        "node_version": { "var": "metadata.vars.node_version" }
+      },
+      "output": "data.tok"
     }
   }
 }

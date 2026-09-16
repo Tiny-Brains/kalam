@@ -188,6 +188,46 @@ scripts/load-package.sh      replacement of objects tagged pkg:kalam
 
 ## Status
 
+**16 September 2026 (later) — one `allow_private_urls` could not express a runner's posture.**
+`kalam-orion` is this node's own admin API at `127.0.0.1:8080`, and 127/8 is private, so off-site a
+runner needs `kalam-api` **refusing** private addresses and `kalam-orion` **permitted** one at the
+same time. `load-package.sh` drove all six connectors from one variable; `kalam-orion` is now
+unconditionally `true`, because the guard is about egress to somewhere else and a node calling
+itself is not that. Driven off the shared variable, an off-site runner's roster clock could not reach
+its own node — and a roster that never catches up refuses every seat.
+
+**`models.max_timeout_ms` was quietly capping the season's `turn_ms`.** `model_infer` asks for the
+claim's value and Orion reduces it with `v.min(…)` without a word, so a replica carrying `1000`
+playing a season at `5000` gave every model one second while the match was scored as if it had five.
+It is `60000` now — `season_rule_spec()`'s own ceiling, not a generous number — and `arch` is derived
+from `uname` rather than defaulting to a literal `amd64` that was wrong on every machine here.
+
+**16 September 2026 — the runner speaks HTTP, and holds no database credential.** `KALAM_MODE=api`
+runs the same task list against `/v1/runner/*` instead of `kalam-db`: eight of the nine
+`db_read`/`db_write`/`storage_presign` tasks become `http_call`, and the ninth — `K_REAP` — is
+**deleted**, because the gate runs it as one cron channel at the centre rather than as every
+caller's first task.
+
+**The two modes meet at `data.ct`, the execution contract**, and below that line the run does not
+know which it is in. In `api` the contract is what the claim answered; in `db` it is built from
+`[vars]`, and it has to be — soma's copy of the read-back joins `seasons` and `games`, and the
+`kalam` role is granted neither, deliberately.
+
+**One call does what three tasks do in `db` mode.** The claim route claims, reads the row back and
+answers with the contract and a claim token the *gate* mints — a runner picking its own could
+collide with another's, and a uuid is free to generate at either end.
+
+**Proved by `conform`, not by argument.** Two matches played end to end through the gate, 1000 turns
+each, came back **IDENTICAL — every field, and all 1000 turns of the action stream** against a local
+re-play. That is the only test that can tell whether moving the claim to HTTP changed how a match is
+*played* rather than how it is *recorded*.
+
+**Three things this turned up**, all in `devops/docs/design-plan.md` phase 2: the gate's idle answer
+had to stop being a bodyless `204`, because `http_call` parses every response as JSON; the replay
+bucket needed a *third* address, because SigV4 signs the host and the gate must sign for the one the
+runner dials; and **a route's request field names are the contract** — sending `seats` where the
+route binds `result` produced a `409 claim_lost`, naming the one thing that was fine.
+
 **15 September 2026 — the match lanes stop recording task detail.** `task_details` is `false` on
 `match_channel_config`, and that one flag was costing a replica ~11 GiB. It made every cron run
 capture a full `ExecutionTrace`, whose `changes` — the old **and** new value of every write — is

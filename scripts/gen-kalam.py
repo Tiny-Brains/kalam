@@ -130,6 +130,11 @@ def http(connector: str, method: str, path, output: str, body=None, **extra) -> 
     return {"name": "http_call", "input": inp}
 
 
+# The token on every gate call. `http_call` resolves each header value as JSONLogic, which is what
+# makes a per-call bearer possible at all -- a connector's static headers could not carry one.
+BEARER = {"Authorization": {"cat": ["Bearer ", var("data.tok.token")]}}
+
+
 def admin(method: str, path, output: str, body=None, **extra) -> dict:
     """A call to THIS node's own admin API, which is where its model set lives."""
     return http("kalam-orion", method, path, output, body, **extra)
@@ -320,19 +325,58 @@ SELECT json_build_object(
 
 # ======================================================================= shared conditions
 
+# ---- KALAM_MODE: where the eight statements live ------------------------------
+#
+# `db` runs them here over `kalam-db`, which is how a replica inside the deployment has always
+# worked. `api` calls /v1/runner/* instead and holds NO DATABASE CREDENTIAL, which is the whole
+# point: a replica can then run on hardware outside the deployment.
+#
+# BOTH PATHS ARE IN ONE TASK LIST, gated on these two conditions, because the list is fixed and
+# there is no other way to carry a dual path -- and a dual path is what lets this land on `main`
+# without a cutover. Every `api` task is `soft`, so a call that fails leaves its slot unset and the
+# next task decides what that means; §4.3 of devops/docs/design.md is why that distinction matters
+# over a WAN and did not over a compose bridge.
+#
+# The two paths MEET at `data.ct`, the execution contract. In `api` it is what the claim answered;
+# in `db` it is built from [vars]. Everything downstream reads `data.ct` and knows neither mode,
+# which is what keeps the conversion to the edges of the run rather than through it.
+MODE_API = {"==": [vars_("mode"), "api"]}
+MODE_DB = {"!=": [vars_("mode"), "api"]}
+
 TURN0 = {"==": [var("temp_data.i"), 0]}
 LIVE = {">": [var("temp_data.n_live"), 0]}
 ENDED = {"and": [{"==": [var("temp_data.n_live"), 0]},
                  {"!": var("data.finished")}]}
 OVER = var("data.finished")
 
-NOT_CLAIMED = {"and": [TURN0, {"!": wrote("temp_data.claim")}]}
+T0_DB = {"and": [TURN0, MODE_DB]}
+T0_API = {"and": [TURN0, MODE_API]}
+
+# CLAIMED IS NORMALISED, not read from either call: `db_write` answers rows_affected and the route
+# answers a body or a 204, so the two cannot share a test. `open` sets this once and every later
+# condition reads it.
+NOT_CLAIMED = {"and": [TURN0, {"!": var("data.claimed")}]}
 NOT_READY = {"and": [TURN0, {">": [var("temp_data.n_missing"), 0]}]}
 
 DO_RENEW = {"and": [LIVE,
                     {">": [var("temp_data.i"), 0]},
-                    {"==": [{"%": [var("temp_data.i"), vars_("renew_every_n_turns")]}, 0]}]}
-RENEW_LOST = {"and": [DO_RENEW, {"!": wrote("temp_data.renewed")}]}
+                    {"==": [{"%": [var("temp_data.i"), var("data.ct.renew_every_n_turns")]}, 0]}]}
+# THE RENEW'S TWO FAILURES ARE NOT THE SAME FAILURE, and over a WAN telling them apart is the
+# difference between halting a healthy match and playing one whose claim is gone.
+#
+#   the statement ran and matched no row -> the claim really is gone. Halt, as it always did.
+#   the call never arrived              -> that says almost nothing. The connector has already
+#                                          retried; keep playing. The lease has ~10x the renew
+#                                          interval of headroom (renew_every_n_turns * turn_ms * 3
+#                                          < lease_seconds, which the gate now enforces by clamping
+#                                          the interval it sends), and if the claim really was lost
+#                                          the finish refuses and the reap re-queues the row.
+#
+# In `db` mode there is no second case: a local socket that fails is a fault.
+RENEW_LOST = {"and": [DO_RENEW, {"or": [
+    {"and": [MODE_DB, {"!": wrote("temp_data.renewed")}]},
+    {"and": [MODE_API, {"===": [var("temp_data.renewed_api.applied"), False]}]},
+]}]}
 
 
 def seat(i: int) -> dict:
@@ -402,39 +446,102 @@ MATCH_TASKS = [
     # comparison against an unresolved ceiling passes and the match dies two turns later at `step`,
     # naming neither the variable nor the cause. So: checked once, loudly, up front.
     task("vars", "Halt unless this replica is configured", halt_unless({"and": [
+        # Both modes need these: the digest decides which rows this node may claim at all, and
+        # orion_version is stamped on every match it finishes.
         {"!=": [vars_("engine_digest"), None]},
-        {">": [vars_("lease_seconds"), 0]},
-        {">": [vars_("renew_every_n_turns"), 0]},
-        {">": [vars_("turn_ms"), 0]},
-        {">": [vars_("max_turns"), 0]},
-        {">": [vars_("refusal_ceiling"), 0]},
-        {"!=": [vars_("replay_prefix"), None]},
-        {"!=": [vars_("blob_endpoint"), None]},
-        {"!=": [vars_("model_prefix"), None]},
         {"!=": [vars_("orion_version"), None]},
+        # `api` needs a key and an address and NOTHING ELSE -- every number a match is played
+        # under arrives on the claim. That asymmetry is the point of the mode: the values below
+        # are what a machine on a desk cannot be trusted to hold equal to the platform's, and so
+        # are exactly the ones it stops holding.
+        {"if": [MODE_API,
+                {"and": [{"!=": [vars_("runner_key"), None]},
+                         {"!=": [vars_("runner_label"), None]}]},
+                {"and": [
+                    {">": [vars_("lease_seconds"), 0]},
+                    {">": [vars_("renew_every_n_turns"), 0]},
+                    {">": [vars_("turn_ms"), 0]},
+                    {">": [vars_("max_turns"), 0]},
+                    {">": [vars_("refusal_ceiling"), 0]},
+                    {"!=": [vars_("replay_prefix"), None]},
+                    {"!=": [vars_("blob_endpoint"), None]},
+                    {"!=": [vars_("model_prefix"), None]},
+                ]}]},
     ]}), cond=TURN0),
 
+    # THE REAP IS `db` ONLY. In `api` the gate runs it as its own cron channel, once, at the
+    # centre -- as every caller's first task it was 0.8N reaps a second at N runners, each scanning
+    # an index whose size is itself proportional to N, for a statement that normally matches
+    # nothing.
     task("reap", "Return lapsed leases to the queue", db(
         "db_write", K_REAP, [], "temp_data.reaped",
-    ), cond=TURN0),
+    ), cond=T0_DB),
 
     task("claim", "Claim one queued match", db(
         "db_write", K_CLAIM,
         [vars_("engine_digest"), var("data.token"), vars_("lease_seconds"), MAX_SEATS],
         "temp_data.claim",
+    ), cond=T0_DB),
+
+    task("row", "The row, its seats and their model ids", db(
+        "db_read", K_ROW, [var("data.token"), vars_("model_prefix")], "temp_data.rows",
+    ), cond=T0_DB),
+
+    # ------------------------------------------------------------------ turn 0: api mode
+    #
+    # ONE CALL DOES WHAT THREE TASKS DO ABOVE: the route claims, reads the row back and answers
+    # both with the execution contract, because claim-then-read was already two statements in one
+    # task list and merging them costs a round trip nobody was using. The gate mints the claim
+    # token too -- a runner that picks its own could collide with another's, and a uuid is free to
+    # generate at either end, so it is better minted where the claim is issued.
+    task("auth0", "Exchange the runner key for a token", {"name": "http_call", "input": {"$from": "constants.runner_token_call"}}, cond=T0_API, soft=True),
+
+    task("noauth", "No token: end the run rather than play unauthenticated", mapping(
+        ("data.outcome", "no_token"),
+    ), cond={"and": [T0_API, {"!": var("data.tok.token")}]}, terminal=True),
+
+    task("claim_api", "Claim one queued match through the gate", http(
+        "kalam-api", "POST", "/v1/runner/claim", "temp_data.cl",
+        {"engine_digest": vars_("engine_digest"), "seat_count": MAX_SEATS},
+        headers=BEARER,
+    ), cond=T0_API, soft=True),
+
+    # ------------------------------------------------------------------ turn 0: the two paths meet
+    task("open", "What the run rides on", mapping(
+        # NORMALISED HERE AND NOWHERE ELSE. Below this line the run does not know which mode it is
+        # in: `data.row`, `data.token` and `data.ct` mean the same thing either way, which is what
+        # keeps the conversion at the edges of the run instead of threaded through it.
+        ("data.claimed", {"if": [MODE_API,
+                                 {"!!": var("temp_data.cl.match.id")},
+                                 wrote("temp_data.claim")]}),
+        ("data.row", {"if": [MODE_API, var("temp_data.cl.match"),
+                             var("temp_data.rows.0.row")]}),
+        ("data.token", {"if": [MODE_API, var("temp_data.cl.claim.token"),
+                               var("data.token")]}),
+        # IN `db` THE CONTRACT IS BUILT FROM [vars], AND IT HAS TO BE: soma's copy of the
+        # read-back joins `seasons` and `games` to resolve the season's execution rules, and the
+        # `kalam` role is granted neither -- deliberately, because "Kalam reads no competitive
+        # decision" is a fact of the grant. So a db-mode replica plays by its own configured
+        # numbers, which is exactly what it did before, and check/configs.sh 1c is what keeps
+        # those equal to the gate's fallbacks for as long as both paths exist.
+        ("data.ct", {"if": [MODE_API, var("temp_data.cl.contract"), {
+            "turn_ms": vars_("turn_ms"),
+            "max_turns": vars_("max_turns"),
+            "model_prefix": vars_("model_prefix"),
+            "engine_digest": vars_("engine_digest"),
+            "replay_prefix": vars_("replay_prefix"),
+            "renew_every_n_turns": vars_("renew_every_n_turns"),
+            "lease_seconds": vars_("lease_seconds"),
+            "refusal_ceiling": vars_("refusal_ceiling"),
+        }]}),
     ), cond=TURN0),
 
     task("idle", "Nothing queued for this engine: end the run", mapping(
         ("data.outcome", "idle"),
     ), cond=NOT_CLAIMED, terminal=True),
 
-    task("row", "The row, its seats and their model ids", db(
-        "db_read", K_ROW, [var("data.token"), vars_("model_prefix")], "temp_data.rows",
-    ), cond=TURN0),
-
-    task("open", "What the run rides on", mapping(
-        ("data.row", var("temp_data.rows.0.row")),
-        ("data.seats", var("temp_data.rows.0.row.seats")),
+    task("opened", "The seats and the refs", mapping(
+        ("data.seats", var("data.row.seats")),
         # THE REFS. A flat list, each entry carrying its own m and seat, which the engine matches
         # on rather than indexes -- and where the per-seat counters live, because a fixed task list
         # has no other way to accumulate anything per seat across turns. Seeded at 0, not left
@@ -478,7 +585,12 @@ MATCH_TASKS = [
     task("release", "A model this node cannot serve: back to the queue", db(
         "db_write", K_RELEASE,
         [var("data.token"), True, vars_("refusal_ceiling")], "temp_data.released",
-    ), cond=NOT_READY),
+    ), cond={"and": [NOT_READY, MODE_DB]}),
+
+    task("release_api", "A model this node cannot serve: back to the queue", http(
+        "kalam-api", "POST", {"cat": ["/v1/runner/matches/", var("data.row.id"), "/release"]},
+        "temp_data.released_api", {"claim_token": var("data.token")}, headers=BEARER,
+    ), cond={"and": [NOT_READY, MODE_API]}, soft=True),
 
     task("unready", "End the run: the roster has not caught up", mapping(
         ("data.outcome", "model_unavailable"),
@@ -487,10 +599,17 @@ MATCH_TASKS = [
     # ------------------------------------------------------------------ turn 0: open the match
     task("start", "Claimed becomes running", db(
         "db_write", K_START, [var("data.token")], "temp_data.started",
-    ), cond=TURN0),
+    ), cond=T0_DB),
+
+    task("start_api", "Claimed becomes running", http(
+        "kalam-api", "POST", {"cat": ["/v1/runner/matches/", var("data.row.id"), "/start"]},
+        "temp_data.started_api", {"claim_token": var("data.token")}, headers=BEARER,
+    ), cond=T0_API, soft=True),
 
     task("started", "Halt if the start wrote nothing: the token is stale",
-         halt_unless(wrote("temp_data.started")), cond=TURN0),
+         halt_unless({"if": [MODE_API,
+                             {"===": [var("temp_data.started_api.started"), True]},
+                             wrote("temp_data.started")]}), cond=TURN0),
 
     task("world", "Build the world", plugin(f"{ENGINE}.worldgen", {
         "seeds": [var("data.row.seed")],
@@ -498,7 +617,7 @@ MATCH_TASKS = [
         # The preset carries the seat count and the engine refuses a caller that disagrees, so
         # passing it is a free check rather than a parameter.
         "players": var("data.row.seat_count"),
-        "max_turns": vars_("max_turns"),
+        "max_turns": var("data.ct.max_turns"),
         "output": "temp_data.w0",
     }), cond=TURN0),
 
@@ -540,7 +659,7 @@ MATCH_TASKS = [
             "output": f"temp_data.p{i}",
             "raw": True,
             "stats_output": f"temp_data.s{i}",
-            "timeout_ms": vars_("turn_ms"),
+            "timeout_ms": var("data.ct.turn_ms"),
         },
     }, cond=seat_plays(i), soft=True)
     for i in range(MAX_SEATS)
@@ -652,7 +771,19 @@ MATCH_TASKS += [
     # ------------------------------------------------------------------ renew
     task("renew", "Extend the lease", db(
         "db_write", K_RENEW, [var("data.token"), vars_("lease_seconds")], "temp_data.renewed",
-    ), cond=DO_RENEW),
+    ), cond={"and": [DO_RENEW, MODE_DB]}),
+
+    # The token is re-minted on the renew tick rather than on a timer. There is no state shared
+    # between runs of a lane -- each is its own workflow occurrence -- so a token cannot live
+    # outside the match that uses it, and a ten-minute one would expire inside a long match. The
+    # renew cadence is already the run's heartbeat and is bounded far inside the TTL, so this costs
+    # one small call per ~30 turns and needs no clock arithmetic to be correct.
+    task("reauth", "Refresh the runner token", {"name": "http_call", "input": {"$from": "constants.runner_token_call"}}, cond={"and": [DO_RENEW, MODE_API]}, soft=True),
+
+    task("renew_api", "Extend the lease", http(
+        "kalam-api", "POST", {"cat": ["/v1/runner/matches/", var("data.row.id"), "/renew"]},
+        "temp_data.renewed_api", {"claim_token": var("data.token")}, headers=BEARER,
+    ), cond={"and": [DO_RENEW, MODE_API]}, soft=True),
 
     task("lost", "Halt: the lease was reaped under us", mapping(
         ("data.outcome", "lease_lost"),
@@ -691,7 +822,7 @@ MATCH_TASKS += [
             {"r": var("temp_data.res"), "n": var("data.row.seat_count"), "items": []}]}),
         # The key names the ATTEMPT, so a stale attempt's blob is an orphan under its own key
         # rather than a replacement for the one that counted.
-        ("temp_data.key", {"cat": [vars_("replay_prefix"), "/",
+        ("temp_data.key", {"cat": [var("data.ct.replay_prefix"), "/",
                                    var("data.row.id"), "/",
                                    var("data.token"), ".json"]}),
     ), cond=ENDED),
@@ -701,11 +832,34 @@ MATCH_TASKS += [
         "input": {"connector": "kalam-blobs", "method": "PUT",
                   "key": var("temp_data.key"), "expires_in": "15m",
                   "output": "temp_data.signed"},
-    }, cond=ENDED),
+    }, cond={"and": [ENDED, MODE_DB]}),
+
+    # THE GATE SIGNS IT, AND FOR THE KEY IT COMPUTES ITSELF from the claim it issued -- so a runner
+    # cannot write under another attempt's key even by accident, which is stronger than the runner
+    # deriving the same string. This is also the call that deletes `kalam-blobs`, the connector
+    # holding the bucket's write secret: `kalam-blobs-put` stays and carries no credential at all,
+    # because it PUTs to whatever URL it is handed.
+    task("presign_api", "Ask the gate to sign this attempt's replay PUT", http(
+        "kalam-api", "POST", {"cat": ["/v1/runner/matches/", var("data.row.id"), "/replay-url"]},
+        "temp_data.signed_api", {"claim_token": var("data.token")}, headers=BEARER,
+    ), cond={"and": [ENDED, MODE_API]}, soft=True),
+
+    task("signed", "One URL and one endpoint, whoever signed it", mapping(
+        ("temp_data.url", {"if": [MODE_API, var("temp_data.signed_api.url"),
+                                  var("temp_data.signed")]}),
+        # `http_call` prefixes its connector's base URL onto `path`, which is why the URL is
+        # trimmed rather than used whole. In `api` the endpoint to subtract arrives in the
+        # response, because the runner no longer holds one.
+        ("temp_data.ep", {"if": [MODE_API, var("temp_data.signed_api.endpoint"),
+                                 vars_("blob_endpoint")]}),
+        # The gate names the key; in db mode the runner already did, identically.
+        ("temp_data.key", {"if": [MODE_API, var("temp_data.signed_api.key"),
+                                  var("temp_data.key")]}),
+    ), cond=ENDED),
 
     task("put", "Write the replay envelope", http(
         "kalam-blobs-put", "PUT",
-        {"substr": [var("temp_data.signed"), {"length": [vars_("blob_endpoint")]}]},
+        {"substr": [var("temp_data.url"), {"length": [var("temp_data.ep")]}]},
         "temp_data.putres", {
             "match_id": var("data.row.id"),
             "attempt_token": var("data.token"),
@@ -720,7 +874,7 @@ MATCH_TASKS += [
             # not merely watched: `tinybrains conform` rebuilds the match from this envelope alone
             # and diffs the result against it.
             "seats": var("data.refs"),
-            "max_turns": vars_("max_turns"),
+            "max_turns": var("data.ct.max_turns"),
             "strike_ceiling": var("data.row.strike_ceiling"),
             "engine_digest": vars_("engine_digest"),
             # What ran the adapters. `evaluator_digest` named an axon build; this names the Orion
@@ -743,10 +897,40 @@ MATCH_TASKS += [
          var("data.opened_at"), vars_("engine_digest"),
          vars_("orion_version"), var("temp_data.key")],
         "temp_data.wrote",
-    ), cond=ENDED),
+    ), cond={"and": [ENDED, MODE_DB]}),
 
-    task("counted", "Halt if the finish wrote nothing: the token is stale",
-         halt_unless(wrote("temp_data.wrote")), cond=ENDED),
+    task("finish_api", "Finish the row -- one statement, on the token", http(
+        "kalam-api", "POST", {"cat": ["/v1/runner/matches/", var("data.row.id"), "/finish"]},
+        # THE FIELD NAMES ARE THE ROUTE'S, not the statement's. `result` and `engine_digest` are what
+        # soma-runner-finish binds to $3 and $7; sending `seats` and `engine_digest_played` -- the
+        # names the COLUMN and the local variable use -- leaves both null, and a null $3 makes the
+        # seat-count check count zero against a seat_count of two. The row then matches nothing and
+        # the route answers 409 claim_lost, naming the claim, which is the one thing that was fine.
+        "temp_data.wrote_api", {
+            "claim_token": var("data.token"),
+            "result": var("temp_data.seatrows.items"),
+            "reason": var("temp_data.res.reason"),
+            "turns": var("temp_data.res.turns"),
+            "opened_at": var("data.opened_at"),
+            "engine_digest": vars_("engine_digest"),
+            "orion_version": vars_("orion_version"),
+            "replay_key": var("temp_data.key"),
+        }, headers=BEARER,
+    ), cond={"and": [ENDED, MODE_API]}, soft=True),
+
+    # A DUPLICATE DELIVERY IS A SUCCESS, and only over a WAN does that need saying. The route
+    # writes and then reads the row back under the same token, so `200 {applied: false,
+    # state: "finished"}` means "you already did this" where a bare rows_affected = 0 could not be
+    # told from "your token is stale". Both were 0 before; conflating them makes a runner that
+    # finished correctly and lost the response report a fault on the match it just completed.
+    #
+    # A call that never arrived leaves the slot unset, and that ends the run WITHOUT finishing --
+    # which is the right answer whether the claim was lost or the network was: the lease lapses and
+    # the reap returns the row. The outcome says `unconfirmed` rather than pretending to know which.
+    task("counted", "Halt unless the row is finished",
+         halt_unless({"if": [MODE_API,
+                             {"===": [var("temp_data.wrote_api.state"), "finished"]},
+                             wrote("temp_data.wrote")]}), cond=ENDED),
 
     task("done", "Mark the run complete", mapping(
         ("data.finished", True),
@@ -766,13 +950,28 @@ MATCH_TASKS += [
 ROSTER_TASKS = [
     task("roster", "What the ladder says this node should be able to play", db(
         "db_read", R_ROSTER, [vars_("model_prefix")], "temp_data.rst",
+    ), cond={"and": [TURN0, MODE_DB]}),
+
+    task("rauth", "Exchange the runner key for a token", {"name": "http_call", "input": {"$from": "constants.runner_token_call"}}, cond={"and": [TURN0, MODE_API]}, soft=True),
+
+    # THE MANIFEST IS REBUILT FIELD BY FIELD AT THE CENTRE, and that is a safety property rather
+    # than tidiness: it is what stops a competitor's `reference` surviving into a registration on
+    # this node. The route answers the same `body` object the statement built, so nothing below
+    # this line changes -- which is the whole test of whether the move was clean.
+    task("roster_api", "What the ladder says this node should be able to play", http(
+        "kalam-api", "GET", "/v1/runner/roster", "temp_data.rstapi", headers=BEARER,
+    ), cond={"and": [TURN0, MODE_API]}, soft=True),
+
+    task("rbody", "One roster, whoever answered", mapping(
+        ("data.rb", {"if": [MODE_API, var("temp_data.rstapi"),
+                            var("temp_data.rst.0.body")]}),
     ), cond=TURN0),
 
     task("more", "Stop when the roster runs out",
-         halt_unless({"<": [var("temp_data.i"), var("temp_data.rst.0.body.n")]})),
+         halt_unless({"<": [var("temp_data.i"), var("data.rb.n")]})),
 
     task("item", "Take version i, and clear the last one", mapping(
-        ("temp_data.it", {"val": ["temp_data", "rst", 0, "body", "items",
+        ("temp_data.it", {"val": ["data", "rb", "items",
                                   {"val": ["temp_data", "i"]}]}),
         # temp_data survives a sweep, so every per-item slot is cleared here: a task skipped this
         # time round would otherwise be read at the PREVIOUS item's value, and the one that matters
