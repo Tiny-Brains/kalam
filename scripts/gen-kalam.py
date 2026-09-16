@@ -35,9 +35,9 @@ ENGINE = "tb.ants"
 # and the claim refuses anything wider rather than playing it short a seat.
 MAX_SEATS = 4
 
-# The action alphabet, and the ONE place the platform knows it. It is the cartridge's, read off
-# `docs/protocol.md` §1 -- a per-cell head's channel order is part of the game's contract, not the
-# competitor's (R3).
+# The action alphabet, and the ONE place the platform knows it. It is the cartridge's, published in
+# the competitor guide's *What your model answers* -- a per-cell head's channel order is part of the
+# game's contract, not the competitor's (R3).
 DIRS = ["N", "E", "S", "W", "-"]
 
 

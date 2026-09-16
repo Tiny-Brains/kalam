@@ -260,9 +260,9 @@ chosen   = {"argmax": [{"if": [{"==": [{"length": [{"shape": [policy]}]}, 4]},
 
 `[1, 5, H, W]` is reshaped to `[5, H*W]`, gathered at the ants' flat indices and transposed to
 `[n, 5]`; `[n, 5]` is already in `mine` order and passes through. Then one `argmax` and one lookup
-into `["N", "E", "S", "W", "-"]` — the action alphabet, which is the **cartridge's** and is read off
-`ants/docs/protocol.md` §1. A per-cell head's channel order is part of the game's contract, not the
-competitor's.
+into `["N", "E", "S", "W", "-"]` — the action alphabet, which is the **cartridge's** and is published
+in the competitor guide's *What your model answers*. A per-cell head's channel order is part of the
+game's contract, not the competitor's.
 
 > `{"val": […]}`'s path segments are **evaluated**, so `{"val": [[1], "data", "dirs", {"var": ""}]}`
 > indexes an array by a computed index. That is how an index becomes a name here; there is no `at`
@@ -459,7 +459,7 @@ All folded in; kept because breaking one of them breaks the match silently.
 | the cartridge | `observe(wave_state, refs)`, refs flat and echoed |
 | the cartridge | `step` accepts the explicit `{m, seat, action}` form, and plays the no-op for an absent seat |
 | the cartridge | the finish result carries `map_id` and `map`, so a replay is self-sufficient |
-| the cartridge | the action alphabet and its channel order, published in `docs/protocol.md` §1 |
+| the cartridge | the action alphabet and its channel order, published in the competitor guide's *What your model answers* |
 
 ---
 
