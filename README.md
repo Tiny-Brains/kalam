@@ -294,6 +294,6 @@ must not be reported as a working match loop.
 
 - Local references: [wave generator](scripts/gen-kalam.py), [engine ABI](plugins/tb-ants/plugin.json), and [SQL check](scripts/check-sql.sh).
 - Design docs: [`docs/design.md`](docs/design.md) — the wave, the lease, the finish, and drain.
-- [The competitor guide](https://github.com/Tiny-Brains/docs) — the reader-facing half: the rules, the model format, the adapter dialect, submitting, ranking and seasons. The platform section is the high-level design for someone new to the codebase.
+- [The competitor guide](https://github.com/Tiny-Brains/web/tree/main/docs) — the reader-facing half: the rules, the model format, the adapter dialect, submitting, ranking and seasons. The platform section is the high-level design for someone new to the codebase.
 - Related repositories: [Soma](https://github.com/Tiny-Brains/soma), [Jodi](https://github.com/Tiny-Brains/jodi), [Ants](https://github.com/Tiny-Brains/ants), [DevOps](https://github.com/Tiny-Brains/devops).
 - Apache-2.0: see [LICENSE](LICENSE).
