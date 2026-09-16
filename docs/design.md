@@ -35,7 +35,7 @@ the package; this page is why they are shaped as they are.
 - the replay envelope's fields
 - drain on SIGTERM, below the orchestrator's grace period
 - `[vars]`: capacity, timing and the two equalities that are correctness rather than tuning
-- the roster clock: how a version verified by Jodi becomes playable on this node
+- the roster clock: how a version verified by Soma's admit clock becomes playable on this node
 
 ---
 
@@ -80,7 +80,7 @@ channel files are build output.
 - **The keys are local in effect.** Kalam's Orion runs on local SQLite with no `[cluster]` block, so
   a key is per replica: four matches per replica, N replicas in parallel. Put N replicas over one
   shared state database and each key becomes a fleet-wide singleton, which looks exactly like idle
-  capacity. This is the opposite of Jodi's use of the same mechanism and worth saying because the
+  capacity. This is the opposite of Soma's clocks' use of the same mechanism and worth saying because the
   spelling is identical.
 - **Nothing coordinates the four.** The claim does: `FOR UPDATE SKIP LOCKED` on one row, so four
   slots and N replicas take disjoint rows rather than queueing behind each other.
@@ -102,11 +102,11 @@ channel files are build output.
 ```
 
 **A model is a per-node entity, and this clock is how the fleet agrees about one.** Each `kalam-N`
-is its own Orion with its own state database, so a version Jodi verified is not registered anywhere
+is its own Orion with its own state database, so a version Soma verified is not registered anywhere
 else by virtue of having been verified. This clock reads `model_versions` — every row the ladder
 says is `verified` or `active` — and registers, admits and activates each one *here*.
 
-**Jodi never calls a replica**, and that is the decision rather than an accident of wiring
+**No clock ever calls a replica**, and that is the decision rather than an accident of wiring
 (R8). A fan-out from the admit clock would need a replica list somewhere, would have to retry a
 replica that was restarting, and would have to be told when a replica joined. The database is
 already the only channel between packages; a clock that reconciles from it needs none of that.
@@ -407,7 +407,7 @@ read as `metadata.vars.*`. The `vars` task halts the run if any of them is missi
 | `turn_ms`, `max_turns` | 1000, 1000 | the cartridge's contract; they must match the registered game |
 | `refusal_ceiling` | 5 | how often a row may be refused for an unserved model before it fails. Refusals are counted apart from lapses |
 | `engine_digest` | the component's hash | **must equal `games.active_engine_digest`** or the clock claims nothing, for ever. The entrypoint derives it from the wasm |
-| `model_prefix` | `tb.v` | **must equal Jodi's and the CLI's.** A replica registers `tb.v<uuid>` and a match row names one; a mismatch is a barrier that never passes |
+| `model_prefix` | `tb.v` | **must equal Soma's and the CLI's.** A replica registers `tb.v<uuid>` and a match row names one; a mismatch is a barrier that never passes |
 | `orion_version` | 1.8.1 | **must equal the soma node's.** A match recorded against one Orion and admitted against another is exactly what the re-validation sweep looks for |
 | `replay_prefix`, `blob_endpoint` | `replays`, `$R2_ENDPOINT` | the attempt key, and the prefix subtracted from the presigned URL |
 | `poll_secs` | 5 | one claim is 0.68 ms against the real table |
@@ -430,7 +430,7 @@ Stated as a list because every one of them is a boundary something else depends 
 1. **It never joins the roster to decide who plays.** The claim reads status, engine digest and
    lease; not `model_versions`, not `ratings`. A row is played because it is `pending` on this
    engine. The roster clock reads `model_versions`, and it decides nothing — it reconciles.
-2. **It never reads or writes a rating.** Counting is Jodi's, in finish order, under a fence.
+2. **It never reads or writes a rating.** Counting is Soma's count clock's, in finish order, under a fence.
 3. **It touches `matches` and `match_seats` and nothing else**, and its role cannot reach anything
    else. The one exception is the roster clock's column-level `SELECT` on `model_versions`, which is
    granted per column and cannot see a verdict, a reason or a rating.

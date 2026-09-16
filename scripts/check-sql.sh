@@ -67,7 +67,7 @@ BEGIN
         RAISE EXCEPTION 'the kalam role cannot UPDATE match_seats.%', missing;
     END IF;
     IF has_column_privilege('kalam', 'matches', 'rated_at', 'UPDATE') THEN
-        RAISE EXCEPTION 'the kalam role can write matches.rated_at -- counting is Jodi''s';
+        RAISE EXCEPTION 'the kalam role can write matches.rated_at -- counting is Soma''s';
     END IF;
     -- The roster clock reads model_versions, and reads FOUR COLUMNS of it (decision R8). The
     -- absences are the point: a replica that can name a model still cannot see what class it is

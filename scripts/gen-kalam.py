@@ -9,7 +9,7 @@ Two clocks since the 1.8.1 rebuild (devops/docs/decisions.md, the R-series):
 
   tb-roster   reconciles this node's model set with the shared schema. Every version the ladder
               says is verified or active is registered here, admitted here, and activated here.
-              Jodi never calls a replica: the database is the only channel (R8).
+              No clock ever calls a replica: the database is the only channel (R8).
 
   tb-match    claims ONE queued row and plays it turn by turn -- observe, one `model_infer` per
               seat, step -- and finishes it in place. The wave is gone: every Ants map is
@@ -1045,7 +1045,7 @@ ROSTER = {
         "ON THIS NODE. Models are a state-database entity and each replica is its own Orion with "
         "its own state database (decision 41), so a roster is per node -- and a clock that "
         "reconciles from the shared schema needs no replica list anywhere, which is what keeps "
-        "Jodi from ever calling a replica (decision R8). One step per item per tick: registration "
+        "any clock from ever calling a replica (decision R8). One step per item per tick: registration "
         "queues admission, and a later tick activates what passed. Nothing here writes to the "
         "platform schema; its database role has SELECT and nothing else on model_versions."
     ),

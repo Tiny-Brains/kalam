@@ -12,7 +12,7 @@
 #   clippy   what lint cannot prove but can be certain of: a run of steps repeating one
 #            condition, an object copied across the set, an input key the function ignores.
 #            IT FOUND A REAL BUG: `channel_call` silently ignores an unknown input key, so
-#            jodi's admit walk called tb-probe with `body` instead of `data` and every
+#            soma's admit walk called tb-probe with `body` instead of `data` and every
 #            submission stalled on PROBE_UNREACHABLE. That is why it runs with --deny-warnings.
 #   fmt      the house style, so a diff is the change and not a reformat.
 #

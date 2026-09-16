@@ -14,7 +14,7 @@ owns. Two clocks since the 1.8.1 rebuild (devops/docs/decisions.md, the R-series
   rows. The *wave* it replaces existed to amortise one batched inference call across many seats —
   a number that is two on every Ants map.
 - **`tb-roster`** reconciles this node's model set with the shared schema: every version the ladder
-  says is verified or active is registered here, admitted here and activated here. **Jodi never
+  says is verified or active is registered here, admitted here and activated here. **No clock ever
   calls a replica** — models are a per-node entity because each replica is its own Orion, and a
   clock that reconciles from Postgres needs no replica list anywhere.
 
@@ -54,8 +54,9 @@ there and it inlines them. `--check` fails if what is on disk has drifted; the D
 repo and those documents disagree, say so and fix one of them; update `README.md`'s Status block
 when work lands.
 
-Ownership is strict: Kalam owns **execution only**. Jodi owns every competitive decision (admission,
-pairing, rating, promotion), Soma owns the schema and the public routes, Ants owns the rules, Orion
+Ownership is strict: Kalam owns **execution only**. Soma owns every competitive decision (admission,
+pairing, rating, promotion — its clocks, the `jodi` repository until 16 September 2026), the
+schema and the public routes, Ants owns the rules, Orion
 owns inference. The packages coordinate through Postgres and never call each other. In `db` mode
 the one HTTP call this package makes is to **its own node's admin API**, which is where its model set
 lives; in `api` mode it also calls Soma's runner gate, which runs the same statements and

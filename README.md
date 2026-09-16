@@ -21,7 +21,7 @@ meet; eligibility, matchmaking, and rankings are decided elsewhere.
 
 **It does not**
 
-- Select opponents, rate results, or promote versions; [Jodi](https://github.com/Tiny-Brains/jodi) owns those decisions.
+- Select opponents, rate results, or promote versions; [Soma](https://github.com/Tiny-Brains/soma)'s clocks own those decisions.
 - Read the roster or expose public routes; [Soma](https://github.com/Tiny-Brains/soma) owns the API and schema.
 - Interpret game state; [Ants](https://github.com/Tiny-Brains/ants) implements the cartridge.
 - Implement inference; Orion's own `models` entity fetches each artifact by digest and runs it
@@ -50,7 +50,7 @@ meet; eligibility, matchmaking, and rankings are decided elsewhere.
 | calls | Replay store | Presign followed by HTTP PUT | One replay object per finished attempt |
 
 The [system map](https://github.com/Tiny-Brains/devops#where-it-sits) shows how replicas scale.
-The match database is the coordination boundary with Jodi; the packages do not call each other.
+The match database is the coordination boundary with Soma's clocks; the packages do not call each other.
 
 ## Interface
 
@@ -187,6 +187,11 @@ scripts/load-package.sh      replacement of objects tagged pkg:kalam
 - **The generated files are the package.** A change to scripts/gen-kalam.py that is not regenerated and committed ships a stale workflow, and nothing at runtime notices.
 
 ## Status
+
+**16 September 2026 (merge) — the clocks Kalam's rows come from are Soma's.** `jodi` merged into
+`soma`, so the pair clock that inserts a match and the count clock that folds it now ship in the soma
+package. Nothing Kalam reads or writes changed: the rows, the grants and every statement are the
+same, and `check-sql.sh`'s `rated_at` refusal now names Soma as the counter. References renamed.
 
 **16 September 2026 (later) — one `allow_private_urls` could not express a runner's posture.**
 `kalam-orion` is this node's own admin API at `127.0.0.1:8080`, and 127/8 is private, so off-site a
@@ -336,5 +341,5 @@ must not be reported as a working match loop.
 - Local references: [wave generator](scripts/gen-kalam.py), [engine ABI](plugins/tb-ants/plugin.json), and [SQL check](scripts/check-sql.sh).
 - Design docs: [`docs/design.md`](docs/design.md) — the wave, the lease, the finish, and drain.
 - [The competitor guide](https://github.com/Tiny-Brains/web/tree/main/docs) — the reader-facing half: the rules, the model format, the adapter dialect, submitting, ranking and seasons. The platform section is the high-level design for someone new to the codebase.
-- Related repositories: [Soma](https://github.com/Tiny-Brains/soma), [Jodi](https://github.com/Tiny-Brains/jodi), [Ants](https://github.com/Tiny-Brains/ants), [DevOps](https://github.com/Tiny-Brains/devops).
+- Related repositories: [Soma](https://github.com/Tiny-Brains/soma), [Ants](https://github.com/Tiny-Brains/ants), [DevOps](https://github.com/Tiny-Brains/devops).
 - Apache-2.0: see [LICENSE](LICENSE).

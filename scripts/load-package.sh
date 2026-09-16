@@ -3,7 +3,7 @@
 #
 #   kalam/scripts/load-package.sh          # ORION_ADMIN selects the replica
 #
-# The same shape as soma/ and jodi/scripts/load-package.sh -- the three are deliberately alike, and
+# The same shape as soma/scripts/load-package.sh -- the two are deliberately alike, and
 # a difference between them should mean something. `orion-server compile` resolves the set --
 # including the `$from` constants in shared/kalam.json, which the admin API does not accept -- into
 # ONE promotion artifact, and `orion-server package apply` stages it, activates in dependency order
