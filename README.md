@@ -49,7 +49,7 @@ meet; eligibility, matchmaking, and rankings are decided elsewhere.
 | calls | Ants | In-process plugin ABI | Opaque state, seat observations, actions, and scores |
 | calls | Replay store | Presign followed by HTTP PUT | One replay object per finished attempt |
 
-The [system map](https://github.com/Tiny-Brains/devops#where-it-sits) shows how replicas scale.
+The [system map](https://github.com/Tiny-Brains/soma/blob/main/docs/architecture.md) shows where runners sit.
 The match database is the coordination boundary with Soma's clocks; the packages do not call each other.
 
 ## Interface
@@ -189,6 +189,15 @@ plugins/tb-ants/             vendored component and manifests
 scripts/gen-kalam.py         readable SQL and workflow generator
 scripts/check-sql.sh         SQL preparation and grant assertions
 scripts/load-package.sh      replacement of objects tagged pkg:kalam
+Dockerfile                   the runner image: orion-server, the package and the engine
+docker/entrypoint.sh         derive the arch and engine, migrate, load the package, run
+docker/runner.toml.tmpl      the runner's instance config (api mode)
+docker/replica-db.toml.tmpl  the retired db-mode config, kept for web's configs check until N10
+docker-compose.yml           one runner, given a Soma URL
+docs/design.md               the match run's design
+docs/decisions.md            Kalam's share of the decision record
+docs/deployment.md           a replica's rules, drain, numbers and roster; a runner on a desk
+docs/orion-notes.md          what building the package found in Orion
 ```
 
 ## What must stay true
@@ -396,5 +405,5 @@ must not be reported as a working match loop.
 - Local references: [wave generator](scripts/gen-kalam.py), [engine ABI](plugins/tb-ants/plugin.json), and [SQL check](scripts/check-sql.sh).
 - Design docs: [`docs/design.md`](docs/design.md) — the wave, the lease, the finish, and drain.
 - [The competitor guide](https://github.com/Tiny-Brains/web/tree/main/docs) — the reader-facing half: the rules, the model format, the adapter dialect, submitting, ranking and seasons. The platform section is the high-level design for someone new to the codebase.
-- Related repositories: [Soma](https://github.com/Tiny-Brains/soma), [Ants](https://github.com/Tiny-Brains/ants), [DevOps](https://github.com/Tiny-Brains/devops).
+- Related repositories: [Soma](https://github.com/Tiny-Brains/soma), [Ants](https://github.com/Tiny-Brains/ants).
 - Apache-2.0: see [LICENSE](LICENSE).

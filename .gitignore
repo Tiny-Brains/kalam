@@ -1,10 +1,9 @@
 # gen-kalam.py is importable, and its bytecode is not the package.
 __pycache__/
 
-# THE BUILD OUTPUT IS NOT COMMITTED. It is carried in the artifact image `Dockerfile` builds --
-# `tinybrains/kalam:dev` locally, `ghcr.io/tiny-brains/kalam:<tag>` published -- and devops copies
-# /artifacts into a volume, mounting that where it used to mount this checkout. `connectors/` is the
-# authored part and is committed.
+# THE BUILD OUTPUT IS NOT COMMITTED. It is generated into the runner image `Dockerfile` builds --
+# `ghcr.io/tiny-brains/kalam:<version>` published -- which loads it into its own node at boot.
+# `connectors/` is the authored part and is committed.
 #
 # `scripts/gen-kalam.py` still writes channels/ and workflows/ locally, and is still what you run
 # while working here. It is just no longer what ships.
@@ -23,7 +22,7 @@ __pycache__/
 /plugins/
 
 # Detached plugin signatures. A signature belongs to whoever holds the trust key, not to this
-# package -- load-package.sh reads PLUGIN_SIG_DIR, and devops keeps them under its own keys/. This
+# package -- load-package.sh reads PLUGIN_SIG_DIR, and a deployment mounts them at /sig. This
 # pattern stays only so a host-side signing run cannot leave one behind here.
 plugins/*/*.wasm.sig
 

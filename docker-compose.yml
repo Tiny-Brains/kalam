@@ -114,7 +114,7 @@ services:
       # `kalam-orion` is exempt because it IS this node.
       #
       # SET IT ONLY AGAINST A LOCAL STACK, where every address is private by definition. That proves
-      # everything except the one thing this variable is about, which is why devops' configs check
+      # everything except the one thing this variable is about, which is why web's scripts/check/configs.sh
       # refuses a runner that carries it with a public Soma URL.
       KALAM_ALLOW_PRIVATE_URLS: ${RUNNER_ALLOW_PRIVATE_URLS:-}
 

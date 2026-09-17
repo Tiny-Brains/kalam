@@ -47,7 +47,7 @@ mode = "api"
 # nothing is silent everywhere -- the clock claims nothing, for ever, and the runner looks healthy
 # doing it. THE CARTRIDGE IS wasm32, so this does not vary by host architecture: the digest an
 # arm64 runner derives is the same one an amd64 deployment declared onto games.active_engine_digest,
-# and devops' scripts/check/configs.sh 1j is the assertion.
+# and web's scripts/check/configs.sh 1j is the assertion.
 engine_digest = "${KALAM_ENGINE_DIGEST}"
 
 # THE RUNNER'S CREDENTIAL, and the whole of what a machine needs to play matches. Minted from the
@@ -166,7 +166,7 @@ max_output_elements = 1048576
 #
 # 60000 is `season_rule_spec()`'s upper bound on `execution.turn_ms` -- the largest number an admin
 # can put in a season -- so this is not "generous", it is EQUAL to what the schema permits, and
-# devops' scripts/check/configs.sh asserts that equality rather than trusting it.
+# web's scripts/check/configs.sh asserts that equality rather than trusting it.
 max_timeout_ms = ${RUNNER_MAX_TIMEOUT_MS:-60000}
 
 [cron]
@@ -192,7 +192,7 @@ max_loop_iterations = 10000
 # THE FAIRNESS CONTROL, and the only one an adapter is judged by at play (decision R6). One
 # evaluation -- one competitor's input adapter -- may spend this many operations. MUST EQUAL soma's
 # budgets.adapter_ops_max, which is what admission judges by, or a model is admitted under one
-# ceiling and played under another. devops' scripts/check/configs.sh checks it.
+# ceiling and played under another. web's scripts/check/configs.sh checks it.
 ops_budget = 1000000
 
 # PROMETHEUS, ON THE MAIN LISTENER, where admin_auth guards it. `bind_addr` is deliberately unset:

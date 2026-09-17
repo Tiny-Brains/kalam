@@ -11,7 +11,7 @@
 # unlike the delete-by-tag-then-POST loop it replaces, nothing is ever briefly absent.
 #
 # ONE REPLICA PER RUN. Each replica is its own Orion with its own state database and there is no
-# epoch bus between them, so devops' run.sh calls this once per entry in KALAM_ORION_ADMINS.
+# epoch bus between them, so each node runs this against itself: docker/entrypoint.sh does, at boot.
 #
 # Environment:
 #   ORION_ADMIN                admin API base (default http://127.0.0.1:8080/api/v1/admin)
@@ -48,7 +48,7 @@ PRIVATE=$([ "${KALAM_ALLOW_PRIVATE_URLS:-0}" = "1" ] && echo true || echo false)
 # a private address is the normal case for them; this one addresses the platform from wherever the
 # runner is, and a runner that will follow a redirect into a private network is the wrong side of
 # Orion's S6 posture to be on. Leave KALAM_ALLOW_PRIVATE_URLS unset anywhere the runner is not on
-# the compose bridge -- devops/scripts/check/configs.sh asserts exactly that.
+# the compose bridge -- web's scripts/check/configs.sh asserts exactly that.
 
 # EXCEPT `kalam-orion`, WHICH IS ALWAYS PRIVATE AND MUST BE. It is THIS NODE'S OWN admin API -- the
 # roster clock registering and activating a model on the machine it is already running on -- and on

@@ -5,8 +5,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 `kalam` ships **no server code**. It is an Orion **1.8.1** package — two cron workflows, five
-channels, six connectors, and the Ants wasm component — loaded into an orion-server that DevOps
-owns. Two clocks since the 1.8.1 rebuild (devops/docs/decisions.md, the R-series):
+channels, six connectors, and the Ants wasm component — loaded into the orion-server this repository's runner image carries. Two clocks since the 1.8.1 rebuild
+(`docs/decisions.md`, the R-series):
 
 - **`tb-match`** claims ONE queued row and plays it: `observe` → one `model_infer` per live seat →
   `step`, until the engine stops returning views, then finishes the row in place. Four channels
@@ -32,7 +32,7 @@ season. Nothing below that line knows which mode it is in, and `tinybrains confo
 play the same match. Three things follow:
 
 - **The `db` copies are a rollback, and nothing compares them with Soma's.** They leave when the
-  `api` path has soaked (N10, `devops/docs/decisions.md` §5). Until then a change to one of the eight
+  `api` path has soaked (N10, `docs/decisions.md` §5). Until then a change to one of the eight
   statements is made in both repositories, or the two modes quietly play by different rules.
 - **The gate's request field names are the contract**, not the column names or this generator's
   variable names. `finish` binds `data.req.result` and `data.req.engine_digest`; sending `seats` and
@@ -43,8 +43,12 @@ play the same match. Three things follow:
   `renew_every_n_turns` so the lease has ~10× the interval of headroom, and a claim that really was
   lost is refused at finish. `RENEW_LOST` in the generator is that rule; do not collapse it.
 
-`devops/docs/architecture.md` §3a is the system-level picture and `devops/docs/deployment.md` §11
-the operator's page for a runner on a machine the deployment does not own.
+soma's `docs/architecture.md` §3a is the system-level picture and `docs/deployment.md` §11
+the operator's page for a runner on a machine the deployment does not own. `docs/decisions.md` is
+Kalam's share of the decision record (the wave, the replica numbers, R3/R7/R8, the runner's
+N-decisions, N10) with an index of the rest; `docs/orion-notes.md` holds the Orion facts building
+the package turned up. `docker/replica-db.toml.tmpl` is the retired `db`-mode config, run by nothing
+and kept in step by web's `scripts/check/configs.sh` until N10.
 
 **`scripts/gen-kalam.py` is the source; `workflows/*.json` and `channels/*.json` are build output.**
 The SQL and JSONLogic are unreadable inline in JSON and readable in the generator, so they live
@@ -193,7 +197,7 @@ honest. A change to any of them here is a change there.
   self-load stops it on a quarantined channel.
 - **The strike ceiling comes off the MATCH ROW, and must not reappear in `[vars]`.** Pair stamps
   `matches.strike_ceiling` from the season (decision 54), so a trial is judged by the rule it was
-  played under even if the deploy's number moved in between. `devops/scripts/check/configs.sh`
+  played under even if the deploy's number moved in between. web's `scripts/check/configs.sh`
   asserts that this package's config does *not* set one — a second copy is what a future edit would
   wire back in. What still must agree across two files is `engine.ops_budget` here and the game's
   `adapter_ops_max`: admitted under one ceiling and struck under another is a competitor forfeiting

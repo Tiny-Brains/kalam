@@ -9,7 +9,7 @@ The row it claims, and every statement it runs, is
 a plugin — [ants](https://github.com/Tiny-Brains/ants). **The model is Orion's own**: a `models`
 entity on this node, registered by this package's second clock, run under `tract` from an artifact
 fetched out of the models bucket by digest. How many replicas run, and what bounds a draining match,
-is [devops/docs/deployment.md](https://github.com/Tiny-Brains/devops/blob/main/docs/deployment.md).
+is [deployment.md](deployment.md).
 
 The package is generated. [`scripts/gen-kalam.py`](../scripts/gen-kalam.py) holds the SQL and the
 task graph readably and inlines both into `workflows/*.json` and `channels/*.json`. Those files are
@@ -379,7 +379,7 @@ Three things make that work, and each was measured failing first:
   shorten a match. Both must exceed the longest match. `server.shutdown_drain_secs` is an
   unconditional sleep for a load balancer Kalam does not sit behind, and belongs **short**. The four
   numbers are
-  [devops/docs/deployment.md](https://github.com/Tiny-Brains/devops/blob/main/docs/deployment.md) §6.2.
+  [deployment.md](deployment.md) §6.2.
 - **The orchestrator's grace period must exceed all three**, which is deployment's.
 
 The failure mode of getting any of this wrong is the same in every case: the rows stay `running`
@@ -397,7 +397,7 @@ matches to four**, which is the one thing the rewrite bought for free.
 ## 6. The numbers
 
 In Kalam's own instance config
-([devops/compose/orion/kalam.toml.tmpl](https://github.com/Tiny-Brains/devops/blob/main/compose/orion/kalam.toml.tmpl)),
+([docker/replica-db.toml.tmpl](../docker/replica-db.toml.tmpl) for a `db`-mode replica; a runner's is [docker/runner.toml.tmpl](../docker/runner.toml.tmpl) and carries none of them),
 read as `metadata.vars.*`. The `vars` task halts the run if any of them is missing.
 
 | Var | Value | What moves it |
@@ -415,7 +415,7 @@ read as `metadata.vars.*`. The `vars` task halts the run if any of them is missi
 
 **`strike_ceiling` is deliberately NOT here.** It is pinned onto `matches.strike_ceiling` by pair
 and read off the row (decision 54), so a trial is judged by the rule it was played under.
-`devops/scripts/check/configs.sh` asserts that this config does **not** set it — a second copy is
+web's `scripts/check/configs.sh` asserts that this config does **not** set it — a second copy is
 what a future edit would wire back in.
 
 `engine.ops_budget` is not a `[vars]` value either: it is an `[engine]` setting, and it **must equal
@@ -471,7 +471,7 @@ and from the 1.8.1 rebuild **R3** (the platform reads the head), **R7** (one mat
 **R8** (a replica registers its own roster) — with the unnumbered calls the match forced: a partial
 renew halts, strikes count cumulatively, per-seat state rides in the ref, and a forfeited seat is
 not inferred at all. Each is recorded with its reasoning in
-[devops/docs/decisions.md](https://github.com/Tiny-Brains/devops/blob/main/docs/decisions.md).
+[decisions.md](decisions.md), which also says where the rest of the record is.
 
 ---
 

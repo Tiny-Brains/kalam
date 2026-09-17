@@ -5,7 +5,7 @@ The SQL and the JSONLogic are unreadable inline in JSON and readable here, so th
 source and `workflows/*.json` + `channels/*.json` are build output. `Dockerfile` regenerates them
 into the artifact image and runs `--check` straight after, so a hand-edited file is a failed build.
 
-Two clocks since the 1.8.1 rebuild (devops/docs/decisions.md, the R-series):
+Two clocks since the 1.8.1 rebuild (docs/decisions.md, the R-series):
 
   tb-roster   reconciles this node's model set with the shared schema. Every version the ladder
               says is verified or active is registered here, admitted here, and activated here.
@@ -338,7 +338,7 @@ SELECT json_build_object(
 # BOTH PATHS ARE IN ONE TASK LIST, gated on these two conditions, because the list is fixed and
 # there is no other way to carry a dual path -- and a dual path is what lets this land on `main`
 # without a cutover. Every `api` task is `soft`, so a call that fails leaves its slot unset and the
-# next task decides what that means; devops/docs/decisions.md §4b is why that distinction matters
+# next task decides what that means; soma's docs/decisions.md §4b is why that distinction matters
 # over a WAN and did not over a compose bridge.
 #
 # The two paths MEET at `data.ct`, the execution contract. In `api` it is what the claim answered;
