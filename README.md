@@ -2,8 +2,8 @@
 
 Kalam plays TinyBrains matches one at a time: it claims a queued row, advances its turns, and
 records the result and the replay. It ships an Orion 1.8.1 package with five cron channels, two
-generated workflows, five connectors, and the Ants plugin; it ships no server.
-[DevOps](https://github.com/Tiny-Brains/devops) chooses the Orion instances that run its definitions.
+generated workflows, five connectors, and the Ants plugin, and it ships them as a **runner**: an image
+of orion-server with the package inside, which plays matches for a Soma from any machine.
 
 ## The name
 
@@ -89,9 +89,21 @@ and the restricted kalam role. Check the SQL/role seam against a development dat
 
 ## Run it, test it
 
-Kalam cannot run alone. Provision the [DevOps stack](https://github.com/Tiny-Brains/devops#run-it-test-it)
-or an Orion instance with the migrated database, `models.enabled = true`, a readable models bucket and a writable replay store.
-Run commands from this repository's root.
+A runner needs a Soma to play for — [web's](https://github.com/Tiny-Brains/web) local stack, or a
+deployment — and nothing else: no database, no bucket secret, no loader.
+
+```sh
+cp .env.example .env          # the Soma URL, a runner key, the trust key, the models read key
+docker compose up -d          # ghcr.io/tiny-brains/kalam:latest; --build for this checkout
+docker compose logs -f runner # "loaded: tb.ants is live and 5 channels are active, this node can claim"
+```
+
+Against web's local stack, uncomment the `host.docker.internal` block in `.env`, mint a key with
+web's `scripts/dev/runner-key.sh`, and point `RUNNER_SIG_DIR` at web's `keys/signatures`. A tag
+`v<major>.<minor>.<patch>` on main publishes the image for amd64 and arm64; `gh workflow run
+release.yml` rehearses it.
+
+To work on the package itself, run commands from this repository's root:
 
 - Orion server 1.8.1 with plugins enabled and the variables below supplied.
 - curl plus jq or Python 3 for loading; Python 3 and Docker for SQL checks.
@@ -148,7 +160,7 @@ package's cron, plugin, or authentication definitions and can report misleading 
 
 The `[vars]` rows are checked once, loudly, at the match clock's `vars` task, which halts if any is
 missing. The
-[replica template](https://github.com/Tiny-Brains/devops/blob/main/compose/orion/kalam.toml.tmpl)
+[runner template](docker/runner.toml.tmpl)
 contains deployment values; capacity and timing are tuning choices, not game-independent constants.
 Derive engine_digest from the vendored bytes and align it with games.active_engine_digest and
 season identity. blob_endpoint must match the replay endpoint used to construct signed paths.
@@ -190,6 +202,17 @@ scripts/load-package.sh      replacement of objects tagged pkg:kalam
 - **The generated files are the package.** A change to scripts/gen-kalam.py that is not regenerated and committed ships a stale workflow, and nothing at runtime notices.
 
 ## Status
+
+**17 September 2026 (night) — a runner image and its compose file, released on a tag.** The image is
+now a runnable node — `orion-server`, `docker/runner.toml.tmpl` (from devops' `compose/orion/`), the
+package and the engine — and `docker/entrypoint.sh` loads the package at boot, as devops' runner
+compose did with `RUNNER_SELF_LOAD`. `docker-compose.yml` is that one service, needing only Soma's
+URL, a key and the deployment's trust key; the `db`-mode replica config stayed in devops, and no
+image runs it (N25). The reference observations left the package again: Soma's image registers the
+cartridge now. Against web's new local stack the runner loaded, activated five channels and reached
+the gate at `host.docker.internal:8080`. `.github/workflows/release.yml` publishes
+`ghcr.io/tiny-brains/kalam` for amd64 and arm64 on a `v*` tag; the root `.gitignore`'s `workflows/`
+was ignoring `.github/workflows/` too, and is anchored now.
 
 **17 September 2026 (night) — the cartridge comes from ants' release, not its image.** `ants` ships
 no Docker image any more (devops N24); its workflow publishes GitHub releases. `Dockerfile` fetches

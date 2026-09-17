@@ -72,13 +72,26 @@ python3 scripts/gen-kalam.py --check       # fail if what is on disk drifted fro
 ./scripts/check-sql.sh                     # PREPARE every shipped statement + assert the role's grants
                                            # (including the roster's column-level read of model_versions)
 KALAM_ALLOW_PRIVATE_URLS=1 R2_ENDPOINT=http://minio:9000 ./scripts/load-package.sh
-docker build -t tinybrains/kalam:dev .     # the artifact image -- the package that actually ships
+
+docker compose up -d --build               # this checkout as a RUNNER (cp .env.example .env first)
+docker compose logs -f runner              # the self-load, then every claim
+gh workflow run release.yml                # rehearse a release: both platforms, nothing pushed
+git tag v0.1.0 && git push origin v0.1.0   # publish ghcr.io/tiny-brains/kalam
 
 # check-defs.sh asserts orion-server is 1.8.x before it runs anything, because an older one reports
-# misleading schema errors on definitions that are correct. If the host binary is old, every replica
-# mounts the package volume and carries the right one:
-docker exec tinybrains-kalam-1-1 orion-server clippy /pkg/kalam --deny-warnings
+# misleading schema errors on definitions that are correct. If the host binary is old, the runner
+# image carries the right one and the package:
+docker run --rm --entrypoint orion-server ghcr.io/tiny-brains/kalam clippy /pkg/kalam --deny-warnings
 ```
+
+**This repository ships a runner, and a runner is the only way Kalam runs** (devops N25). The image
+is `orion-server` + `docker/runner.toml.tmpl` + the package + the engine from one ants release, and
+`docker/entrypoint.sh` loads the package into the node at boot and kills it if the match channels
+did not activate. `docker-compose.yml` is one service and needs only Soma's URL, a runner key, the
+deployment's trust key and its signatures — no database, no bucket secret, no loader. Against web's
+local stack every address is `host.docker.internal`; `.env.example` has the block. A `v*` tag on
+main publishes the image for amd64 and arm64 (`.github/workflows/release.yml`), with the ants
+release it plays and the engine digest as labels.
 
 **The four `tb-match-N` channels differ in `channel_id` and `concurrency.key` and nothing else.**
 That is the whole of what makes them separate lanes: `forbid` on a per-channel key gives one match
@@ -99,9 +112,10 @@ the set must be **compiled** before it is applied — which is what `load-packag
 `check-sql.sh` needs Docker and a running `tinybrains-db-1`; it reads Soma's migrations from
 `../soma/migrations` (`MIGRATIONS` overrides) and recreates a `kalam_sqlcheck` scratch database.
 `load-package.sh` targets `ORION_ADMIN` and sweeps everything tagged `pkg:kalam` before re-creating
-it, so it is re-runnable; `docker compose run --rm loader` from devops does the same for all three
-packages. There is no unit-test suite — lint plus `check-sql.sh` are the compiler for this repo, and
-neither exercises leases or turn execution. A real match needs the DevOps stack.
+it, so it is re-runnable; the runner image runs it against itself at every boot. There is no
+unit-test suite — lint plus `check-sql.sh` are the compiler for this repo, and neither exercises
+leases or turn execution. A real match needs a Soma: web's compose stack, and this repository's
+runner pointed at it.
 
 ## Architecture
 
@@ -165,19 +179,18 @@ honest. A change to any of them here is a change there.
 
 - **A generator run that never reached the image ships a stale package**, and nothing at runtime
   notices. `check-sql.sh` reads the JSON on disk; the image regenerates it, so the two agree only if
-  you rebuild. After editing anything here: `docker compose --profile build build kalam-pkg` —
-  devops mounts this package straight from its image, so a
-  stale volume fails like a bug in the change you just made.
+  you rebuild. After editing anything here: `docker compose up -d --build` — a runner started from
+  an older image is running the package you had before the change.
 - **`engine_digest` must equal the component's sha256 and `games.active_engine_digest`.** The claim
   filters on it, so a mismatch is not an error anywhere — the replica claims nothing, for ever, and
   the queue grows. **This repo no longer keeps its own copy of the component**: `Dockerfile` fetches
   it from the cartridge's GitHub release — the latest, unless `ANTS_RELEASE` names a tag — so ants
   and kalam cannot disagree by construction, which they once did, from an edit that changed no
-  behaviour at all. **So an image build after an ants release is an engine cutover**
-  (`devops/scripts/deploy/declare-engine.sh`), not a cleanup step; pin `ANTS_RELEASE` under a live
-  season. The image also carries the cartridge's `reference/observations.json` under
-  `plugins/tb-ants/`, beside `cartridge.json`, because the loader registers both from here.
-  Re-sign with `devops/scripts/setup/sign-plugins.sh` afterwards or the node comes up `degraded`.
+  behaviour at all. **So an image build after an ants release is an engine cutover**, not a cleanup
+  step: Soma's image declares the engine of the release IT was built from, and a runner on another
+  claims nothing — pin `ANTS_RELEASE` (or the repository variable the release workflow reads) under
+  a live season. Re-sign with web's `scripts/setup/sign-plugins.sh` afterwards, or the runner's
+  self-load stops it on a quarantined channel.
 - **The strike ceiling comes off the MATCH ROW, and must not reappear in `[vars]`.** Pair stamps
   `matches.strike_ceiling` from the season (decision 54), so a trial is judged by the rule it was
   played under even if the deploy's number moved in between. `devops/scripts/check/configs.sh`
