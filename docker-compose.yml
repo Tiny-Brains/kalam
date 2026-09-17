@@ -1,0 +1,150 @@
+# A TINYBRAINS RUNNER. One container, and the only thing it needs to reach is a Soma.
+#
+#   cp .env.example .env                 # the Soma URL, RUNNER_KEY, the trust key and signatures
+#   docker compose up -d                 # the image published for the latest release
+#   docker compose up -d --build         # or this checkout, built
+#   docker compose logs -f
+#
+# WHAT IT DOES NOT CONTAIN IS THE WHOLE ARGUMENT. There is no database, no object store, no Soma and
+# no second service of any kind. Everything a runner needs that is not on this machine, it asks
+# Soma's gate for -- the match, the numbers it is played under, the URL to write the replay to -- and
+# model bytes are a GET on a public-read bucket, re-hashed against the digest the gate named. If this
+# file ever grows a second service, a runner has stopped being something you can put on a desk.
+#
+# WHAT THE OPERATOR COPIES FROM THE DEPLOYMENT. Three things:
+#
+#   RUNNER_KEY             minted on the admin Runners screen, shown once. Revoking it there stops
+#                          this machine within one token lifetime (ten minutes).
+#   TB_TRUST_PUBLIC_KEY    the deployment's plugin trust key, and its signatures directory -- the
+#                          engine's signature belongs to whoever holds that key, so it can be in
+#                          neither this image (shared by every deployment) nor this repository.
+#   the addresses          Soma, the models bucket, and the blob endpoint Soma signs replay PUTs for.
+#
+# AGAINST web's LOCAL STACK every address is this machine's, reached as host.docker.internal: Soma
+# on :8080, MinIO on :9000. .env.example carries that block, and RUNNER_ALLOW_PRIVATE_URLS=1, which
+# a runner pointed at a real deployment must never set.
+name: tinybrains-runner
+
+services:
+  runner:
+    build:
+      context: .
+    # The published image unless built here. `up --build` tags this checkout's build with the same
+    # name, which is how a Kalam change is tried against a real Soma.
+    image: ${KALAM_IMAGE:-ghcr.io/tiny-brains/kalam:latest}
+    restart: unless-stopped
+
+    # PID 1 is tini, which reaps the self-load fork and forwards SIGTERM to Orion unchanged, so a
+    # draining match still gets its full shutdown_force_timeout_secs. docker/entrypoint.sh says why.
+    init: true
+
+    # host.docker.internal resolves on Docker Desktop by itself; this makes it resolve on Linux too,
+    # where web's local stack publishes Soma and MinIO on the host.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+    volumes:
+      # The deployment's plugin signatures, copied onto this machine. Without them the engine fails
+      # verification, the channels quarantine, and the self-load refuses to come up -- loudly, which
+      # is the point. Against web's local stack this is that checkout's keys/signatures.
+      - ${RUNNER_SIG_DIR:-./keys/signatures}:/sig:ro
+      # The model cache: artifacts fetched by digest and kept between loads. A named volume, so a
+      # restart does not re-download every model this runner plays. Size the Docker VM above
+      # RUNNER_MAX_CACHE_BYTES + RUNNER_MAX_LOADED_BYTES.
+      - runner-models:/var/lib/orion/models
+
+    environment:
+      # ---- what makes this machine a runner ------------------------------------------------
+      RUNNER_KEY: ${RUNNER_KEY:?mint one on the Runners screen and put it in .env}
+      RUNNER_LABEL: ${RUNNER_LABEL:-runner}
+      # DERIVED from uname by the entrypoint unless set. Leave it unset: a hand-typed arch on the
+      # Runners screen is a label that lies in exactly the situation the screen exists for.
+      RUNNER_ARCH: ${RUNNER_ARCH:-}
+      RUNNER_NODE_VERSION: ${RUNNER_NODE_VERSION:-dev}
+
+      # ---- the platform, as seen from here -------------------------------------------------
+      # SOMA. Every match statement this runner runs is a call to /v1/runner/* here.
+      KALAM_API_URL: ${SOMA_URL:?the Soma this runner plays for, e.g. https://tinybrains.dev}
+      # THE MODELS BUCKET, public-read, and the read-only key that signs the GET. Orion's `models`
+      # entity must sign with something (`ArtifactRef` is {connector, key, digest} and has no URL
+      # variant) and on a public bucket that something is not sensitive. The digest stays the
+      # contract: every byte is re-hashed against what the roster declared.
+      MODELS_BUCKET: ${MODELS_BUCKET:-tinybrains-models}
+      MODELS_ENDPOINT: ${MODELS_ENDPOINT:?the models bucket's endpoint, as reached from this machine}
+      MODELS_READ_ACCESS_KEY: ${MODELS_READ_ACCESS_KEY:?copy it from the deployment}
+      MODELS_READ_SECRET_KEY: ${MODELS_READ_SECRET_KEY:?copy it from the deployment}
+      # THE REPLAY BUCKET'S ADDRESS, AND IT IS NOT A CREDENTIAL. The runner never signs a replay PUT
+      # -- it asks the gate, which answers a presigned URL and the endpoint it signed for. This is the
+      # BASE of the connector that then makes that PUT, and it MUST EQUAL Soma's RUNNER_BLOB_ENDPOINT:
+      # SigV4 signs the host, so a URL signed for one address and sent to another is
+      # `SignatureDoesNotMatch`, a 403 that names neither setting.
+      #
+      # It goes in as R2_ENDPOINT because that is the name `kalam-blobs-put` is staged from. The
+      # matching R2_ACCESS_KEY and R2_SECRET_KEY are EMPTY, so `kalam-blobs` -- the connector that
+      # would sign for itself -- has nothing to sign with. A runner that could sign its own replay
+      # URL would be a runner the gate's claim-token check does not bind.
+      R2_ENDPOINT: ${RUNNER_BLOB_ENDPOINT:?the replay bucket endpoint Soma signs for}
+
+      # ---- what this machine does NOT hold, which is the point ------------------------------
+      #
+      # EMPTY, NOT ABSENT, AND THE DIFFERENCE IS THE WHOLE NODE. An unresolvable `env://` makes Orion
+      # skip that connector, and a WORKFLOW that references a skipped connector CANNOT ACTIVATE --
+      # `package apply` stops at the first one and leaves every channel after it a DRAFT, and a draft
+      # cron channel holds no schedule. Set to the empty string they RESOLVE, so `kalam-db` and
+      # `kalam-blobs` exist, load, and are never reached: every task that names them is gated on
+      # `mode != "api"`. ALL FOUR, because a connector needs EVERY `env://` it names to resolve.
+      # When N10 deletes the package's `db` branch, these four lines go with it.
+      KALAM_DB_URL: ""
+      R2_BUCKET: ""
+      R2_ACCESS_KEY: ""
+      R2_SECRET_KEY: ""
+
+      # ---- how the package gets here -------------------------------------------------------
+      PLUGIN_SIG_DIR: /sig
+      TB_TRUST_PUBLIC_KEY: ${TB_TRUST_PUBLIC_KEY:?copy it from the deployment}
+      # THIS NODE'S OWN ADMIN PLANE, and nothing else's. It authorises the package load and the roster
+      # clock's calls to 127.0.0.1, both of which stay on this machine. It is NOT the deployment's
+      # admin key and must not be: generate one here.
+      #   openssl rand -hex 32
+      ORION_ADMIN_KEY: ${ORION_ADMIN_KEY:?generate one for this machine -- openssl rand -hex 32}
+      ORION_ADMIN_BEARER: Bearer ${ORION_ADMIN_KEY}
+      # EMPTY, AND THAT IS THE POSTURE. With this unset, `kalam-api`, `kalam-models` and
+      # `kalam-blobs-put` refuse to resolve to a private address -- so a redirect, or a DNS answer,
+      # that points this runner into a network behind it is refused rather than followed.
+      # `kalam-orion` is exempt because it IS this node.
+      #
+      # SET IT ONLY AGAINST A LOCAL STACK, where every address is private by definition. That proves
+      # everything except the one thing this variable is about, which is why devops' configs check
+      # refuses a runner that carries it with a public Soma URL.
+      KALAM_ALLOW_PRIVATE_URLS: ${RUNNER_ALLOW_PRIVATE_URLS:-}
+
+      ORION_VERSION: ${ORION_VERSION:-1.8.1}
+      # A draining match is worth waiting for: it is a real result that is otherwise replayed from
+      # scratch by whoever claims the row next.
+      ORION_SHUTDOWN_DRAIN_SECS: ${RUNNER_SHUTDOWN_DRAIN_SECS:-5}
+      ORION_SHUTDOWN_FORCE_SECS: ${RUNNER_SHUTDOWN_FORCE_SECS:-2700}
+      ORION_CRON_SHUTDOWN_SECS: ${RUNNER_CRON_SHUTDOWN_SECS:-2700}
+      RUNNER_CRON_WORKERS: ${RUNNER_CRON_WORKERS:-2}
+      RUNNER_MAX_CACHE_BYTES: ${RUNNER_MAX_CACHE_BYTES:-4294967296}
+      RUNNER_MAX_LOADED_BYTES: ${RUNNER_MAX_LOADED_BYTES:-2147483648}
+
+    # Must exceed drain + force, or Docker SIGKILLs the drain and leaves rows `running` with a live
+    # lease and no error anywhere -- a wedged match that only the reap clock will ever free.
+    stop_grace_period: ${RUNNER_STOP_GRACE:-2760s}
+
+    # LOOPBACK ONLY, and only because an operator may want to read /health or /metrics. A runner binds
+    # no route, it makes calls. Publishing 8080 would publish this machine's admin plane. 8090 by
+    # default, so a runner and web's local stack (Soma on 8080) fit on one machine.
+    ports:
+      - "127.0.0.1:${RUNNER_ADMIN_PORT:-8090}:8080"
+
+    # The engine is wasm and the models are ONNX on CPU; both want cores more than anything else.
+    # Left unset by default -- a dedicated machine should use what it has.
+    deploy:
+      resources:
+        limits:
+          cpus: ${RUNNER_CPUS:-0}
+          memory: ${RUNNER_MEMORY:-0}
+
+volumes:
+  runner-models:

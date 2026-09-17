@@ -8,3 +8,7 @@ plugins/
 .git/
 .run/
 __pycache__/
+
+# The runner's local settings and signatures are not an input to the image.
+.env
+keys/

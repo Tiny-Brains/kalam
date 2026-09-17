@@ -26,3 +26,8 @@ plugins/
 # package -- load-package.sh reads PLUGIN_SIG_DIR, and devops keeps them under its own keys/. This
 # pattern stays only so a host-side signing run cannot leave one behind here.
 plugins/*/*.wasm.sig
+
+# A runner's own settings and the deployment signatures copied onto this machine. .env.example is
+# the committed shape of the first; the second belongs to whoever holds the trust key.
+.env
+keys/
