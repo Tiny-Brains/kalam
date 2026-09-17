@@ -118,7 +118,10 @@ with a checkout containing Ants' plugin.toml for that check, or validate against
 at load.
 
 Edit scripts/gen-kalam.py and regenerate with `python3 scripts/gen-kalam.py`; commit the workflow
-and channel output. To update the engine, move ANTS_REF: the component comes from the cartridge's own artifact image, so this repository keeps no copy of it.
+and channel output. To update the engine, rebuild the image: the component, `cartridge.json` and the reference
+observations come from the cartridge's latest GitHub release (or the tag `ANTS_RELEASE` names), so
+this repository keeps no copy of them. `--build-context ants=../ants/dist` builds against an ants
+checkout's own build instead.
 That script copies committed artifacts and prints their digest; it does not compile Ants.
 
 Use the pinned Orion 1.8.1 toolchain for these checks. Older binaries do not understand this
@@ -187,6 +190,15 @@ scripts/load-package.sh      replacement of objects tagged pkg:kalam
 - **The generated files are the package.** A change to scripts/gen-kalam.py that is not regenerated and committed ships a stale workflow, and nothing at runtime notices.
 
 ## Status
+
+**17 September 2026 (night) — the cartridge comes from ants' release, not its image.** `ants` ships
+no Docker image any more (devops N24); its workflow publishes GitHub releases. `Dockerfile` fetches
+the latest with curl (`ANTS_RELEASE` names a tag instead; `releases.atom`, ADDed first, is what
+refreshes the cached layer when a new release lands), checks the viewer inside was transpiled
+from the component beside it, and takes the component, both plugin manifests and `cartridge.json`
+as before — plus `reference/observations.json`, which the loader used to read from a mount of the
+ants image and now reads from this package. Built from `engine-df312c0458d9`, the four files it
+already carried are byte-identical to the image-built package's.
 
 **17 September 2026 (night) — an eliminated colony is not asked for a move.** Found on the first
 ladder with three seats or more: a colony with no ants stays in the match, `observe` still sends

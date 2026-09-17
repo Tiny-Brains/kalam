@@ -17,8 +17,9 @@ workflows/
 # ladder played a component ants does not ship, with a viewer built against the other, and it
 # happened once from an edit that changed no behaviour at all.
 #
-# `Dockerfile` now takes the component straight from the cartridge's own artifact image (`ANTS_REF`),
-# so there is one copy and the two cannot disagree by construction.
+# `Dockerfile` now fetches the component straight from the cartridge's own GitHub release
+# (`ANTS_RELEASE`, the latest by default), so there is one copy and the two cannot disagree by
+# construction.
 plugins/
 
 # Detached plugin signatures. A signature belongs to whoever holds the trust key, not to this

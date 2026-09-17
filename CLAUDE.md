@@ -170,10 +170,13 @@ honest. A change to any of them here is a change there.
   stale volume fails like a bug in the change you just made.
 - **`engine_digest` must equal the component's sha256 and `games.active_engine_digest`.** The claim
   filters on it, so a mismatch is not an error anywhere — the replica claims nothing, for ever, and
-  the queue grows. **This repo no longer keeps its own copy of the component**: `Dockerfile` takes it
-  from the cartridge's artifact image via `ANTS_REF`, so ants and kalam cannot disagree by
-  construction — which they once did, from an edit that changed no behaviour at all. Moving
-  `ANTS_REF` is an engine cutover (`devops/scripts/deploy/declare-engine.sh`), not a cleanup step.
+  the queue grows. **This repo no longer keeps its own copy of the component**: `Dockerfile` fetches
+  it from the cartridge's GitHub release — the latest, unless `ANTS_RELEASE` names a tag — so ants
+  and kalam cannot disagree by construction, which they once did, from an edit that changed no
+  behaviour at all. **So an image build after an ants release is an engine cutover**
+  (`devops/scripts/deploy/declare-engine.sh`), not a cleanup step; pin `ANTS_RELEASE` under a live
+  season. The image also carries the cartridge's `reference/observations.json` under
+  `plugins/tb-ants/`, beside `cartridge.json`, because the loader registers both from here.
   Re-sign with `devops/scripts/setup/sign-plugins.sh` afterwards or the node comes up `degraded`.
 - **The strike ceiling comes off the MATCH ROW, and must not reappear in `[vars]`.** Pair stamps
   `matches.strike_ceiling` from the season (decision 54), so a trial is judged by the rule it was

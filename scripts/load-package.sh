@@ -81,7 +81,7 @@ fi
 # THE SIGNATURE, attached after compile: `package.content_hash` projects a plugin through its
 # manifest, digest and tags only, so adding one does not invalidate the artifact. A signature
 # belongs to whoever holds the trust key, never to the package -- which for the cartridge is not
-# even this repository's to hold, since the component comes from ants' artifact image.
+# even this repository's to hold, since the component comes from ants' release.
 if [ -n "${PLUGIN_SIG_DIR:-}" ] || [ -d plugins ]; then
   echo "==> attaching plugin signatures"
   SIG_DIR="${PLUGIN_SIG_DIR:-}" python3 -c '
@@ -128,7 +128,7 @@ for kind in channels workflows connectors plugins; do
   esac
   # An artifact with NONE of a kind was built without that kind's source, so it cannot say which of
   # them should exist and must not retire any. THIS PACKAGE IS WHY THE GUARD EXISTS: the cartridge
-  # comes from ants' artifact image, so a checkout with no plugins/ compiles to an artifact with no
+  # comes from ants' release, so a checkout with no plugins/ compiles to an artifact with no
   # plugins -- and an unguarded sweep would delete tb.ants, which is the whole engine.
   grep -q "^$kind/" "$STAGE.keep" || continue
   for id in $(curl_admin "$ADMIN/$kind?tag=pkg:kalam&limit=500" \
