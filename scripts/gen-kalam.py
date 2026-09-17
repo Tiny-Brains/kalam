@@ -405,7 +405,7 @@ def seat_plays(i: int) -> dict:
     later the seat was forfeited and ranked `engine_rank + seat_count`, under seats it had
     outscored, and drawn as a disqualification. There is nothing for such a seat to order, so there
     is nothing to miss; the engine plays the no-op for a seat it is given nothing for, and a colony
-    that spawns again from its hive is asked again the turn it has an ant. `devops/cli/src/wave.rs`
+    that spawns again from its hive is asked again the turn it has an ant. `cli/src/wave.rs`
     applies the same rule, which is what keeps `tinybrains conform` agreeing."""
     return {"and": [LIVE, seat_exists(i), {"!": var(f"data.f{i}")},
                     {"!!": [var(f"temp_data.v{i}.mine")]}]}

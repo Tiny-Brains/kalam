@@ -269,7 +269,7 @@ game's contract, not the competitor's.
 > indexes an array by a computed index. That is how an index becomes a name here; there is no `at`
 > operator, and the nested-`if` chain it replaces cost four comparisons per element.
 
-`devops/cli/src/model.rs` does the same decode in Rust, and `tinybrains conform` is what keeps the
+`cli/src/model.rs` does the same decode in Rust, and `tinybrains conform` is what keeps the
 two equal.
 
 **`actions` takes the explicit `{m, seat, action}` form, not the positional one.** A forfeited seat

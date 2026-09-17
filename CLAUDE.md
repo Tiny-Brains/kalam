@@ -152,10 +152,10 @@ cost every seat's deadline plus the step.
 **The head is decoded here, not in the manifest** (decision R3). A `result` expression's root is the
 output tensors alone, so it cannot see the observation and cannot gather at the ants' cells: the
 workflow asks for `raw: true` and does the gather itself, branching on the head's rank —
-`[1,5,H,W]` gathers, `[n,5]` is already in `mine` order. `devops/cli/src/model.rs` does the same in
+`[1,5,H,W]` gathers, `[n,5]` is already in `mine` order. `cli/src/model.rs` does the same in
 Rust, and `tinybrains conform` is what keeps them equal.
 
-**`devops/cli/src/wave.rs` is a deliberate second implementation** of five of this repo's rules — the
+**`cli/src/wave.rs` is a deliberate second implementation** of five of this repo's rules — the
 explicit `{m, seat, action}` form, omission-as-no-op for a forfeited seat or one with no ants, cumulative strikes,
 `engine_rank + seat_count` for forfeit ranks, and the flat echoed refs — plus the head decode above.
 `tinybrains conform` diffs a replay envelope against a local re-run and is what keeps the two
