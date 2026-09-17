@@ -151,8 +151,9 @@ board.
 
 **`seat_count <= $4` is new and deliberate.** A seat is a task and the task list is fixed, so
 `MAX_SEATS` (4) `model_infer` tasks are generated and the claim refuses a wider row rather than
-playing it short a seat. Every board the catalogue ships is two-player; the ceiling is room for a
-four-player preset and a refusal for anything beyond it.
+playing it short a seat. The catalogue ships one four-seat preset, `rooms-4`, which is exactly the
+ceiling; the generator can make boards for up to eight, and none of those can be claimed until this
+moves.
 
 ### 4.2 The roster barrier
 
@@ -327,7 +328,7 @@ Written per attempt under a key naming the token, so a stale attempt's blob is a
 a replacement for the one that counted.
 
 ```jsonc
-{ "match_id": "…", "attempt_token": "…", "seed": …, "preset": "standard",
+{ "match_id": "…", "attempt_token": "…", "seed": …, "preset": "open-2",
   "map_id": "…", "map": { … },       // the board, so a replay outlives a preset re-tuning
   "seats": [ … ],                    // who sat where, by hash
   "max_turns": 1000,
