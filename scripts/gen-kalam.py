@@ -30,10 +30,14 @@ PKG = pathlib.Path(__file__).resolve().parent.parent
 
 ENGINE = "tb.ants"
 
-# How many seats a match may have and still be claimed here. The task list is fixed, so a seat is
-# a task: four is every board the catalogue ships (all 2-player) with room for a 4-player preset,
-# and the claim refuses anything wider rather than playing it short a seat.
-MAX_SEATS = 4
+# How many seats a match may have and still be claimed here. The seat count a match is PLAYED at is
+# never this: it is the row's `seat_count`, which pair copied from the preset, which the map declares
+# -- every seat task below is conditioned on it, so a two-seat match runs two inferences a turn and
+# skips the rest. This is only the ceiling of the fixed task list, and it is the platform's: mapgen's
+# `MAX_SEATS` refuses a recipe above eight, and the site draws two to eight. A ceiling below that is
+# a preset the ladder pairs and no replica can claim; the claim refuses anything wider rather than
+# playing it short a seat.
+MAX_SEATS = 8
 
 # The action alphabet, and the ONE place the platform knows it. It is the cartridge's, published in
 # the competitor guide's *What your model answers* -- a per-cell head's channel order is part of the
@@ -366,10 +370,11 @@ DO_RENEW = {"and": [LIVE,
 #
 #   the statement ran and matched no row -> the claim really is gone. Halt, as it always did.
 #   the call never arrived              -> that says almost nothing. The connector has already
-#                                          retried; keep playing. The lease has ~10x the renew
-#                                          interval of headroom (renew_every_n_turns * turn_ms * 3
-#                                          < lease_seconds, which the gate now enforces by clamping
-#                                          the interval it sends), and if the claim really was lost
+#                                          retried; keep playing. The lease outlasts the renew
+#                                          interval however slow the turn (renew_every_n_turns *
+#                                          turn_ms * (seat_count + 1) <= lease_seconds: every seat's
+#                                          deadline and the step), which both modes enforce by
+#                                          clamping the interval, and if the claim really was lost
 #                                          the finish refuses and the reap re-queues the row.
 #
 # In `db` mode there is no second case: a local socket that fails is a fault.
@@ -389,10 +394,21 @@ def seat_exists(i: int) -> dict:
 
 
 def seat_plays(i: int) -> dict:
-    """A seat is asked for a move while the match is live, it exists, and it has not forfeited.
-    A forfeited seat is never inferred: it plays the no-op by construction, which is the same
-    rule the wave had and the reason a forfeit costs nothing after it is taken."""
-    return {"and": [LIVE, seat_exists(i), {"!": var(f"data.f{i}")}]}
+    """A seat is asked for a move while the match is live, it exists, it has not forfeited, and it
+    has an ant to order. A forfeited seat is never inferred: it plays the no-op by construction,
+    which is the same rule the wave had and the reason a forfeit costs nothing after it is taken.
+
+    **A seat with no ants is not asked either**, and before seats ran past two that could not
+    happen: a two-seat match ends the turn a colony is empty. From three seats up an eliminated
+    colony stays in the match, `observe` still sends it a view with an empty `mine`, and its decoded
+    action is `[]` -- which is FALSY, so the strike test below read an answer as a miss. Five turns
+    later the seat was forfeited and ranked `engine_rank + seat_count`, under seats it had
+    outscored, and drawn as a disqualification. There is nothing for such a seat to order, so there
+    is nothing to miss; the engine plays the no-op for a seat it is given nothing for, and a colony
+    that spawns again from its hive is asked again the turn it has an ant. `devops/cli/src/wave.rs`
+    applies the same rule, which is what keeps `tinybrains conform` agreeing."""
+    return {"and": [LIVE, seat_exists(i), {"!": var(f"data.f{i}")},
+                    {"!!": [var(f"temp_data.v{i}.mine")]}]}
 
 
 def view_of(i: int) -> dict:
@@ -530,7 +546,15 @@ MATCH_TASKS = [
             "model_prefix": vars_("model_prefix"),
             "engine_digest": vars_("engine_digest"),
             "replay_prefix": vars_("replay_prefix"),
-            "renew_every_n_turns": vars_("renew_every_n_turns"),
+            # CLAMPED BY THE ROW'S SEAT COUNT, as the gate clamps the interval it sends: a turn can
+            # cost every seat's deadline plus the step, so an eight-seat match renewing on an
+            # interval sized for two outlives its lease on slow turns and is reaped mid-play.
+            # `data.row` is written above, and a map's mappings apply in order.
+            "renew_every_n_turns": {"max": [1, {"min": [
+                vars_("renew_every_n_turns"),
+                {"floor": [{"/": [{"*": [vars_("lease_seconds"), 1000]},
+                                  {"*": [{"+": [var("data.row.seat_count"), 1]},
+                                         vars_("turn_ms")]}]}]}]}]},
             "lease_seconds": vars_("lease_seconds"),
             "refusal_ceiling": vars_("refusal_ceiling"),
         }]}),

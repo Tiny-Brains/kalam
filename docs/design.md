@@ -150,10 +150,10 @@ exists — and the preset grouping, which existed so one `observe` could serve a
 board.
 
 **`seat_count <= $4` is new and deliberate.** A seat is a task and the task list is fixed, so
-`MAX_SEATS` (4) `model_infer` tasks are generated and the claim refuses a wider row rather than
-playing it short a seat. The catalogue ships one four-seat preset, `rooms-4`, which is exactly the
-ceiling; the generator can make boards for up to eight, and none of those can be claimed until this
-moves.
+`MAX_SEATS` (8) `model_infer` tasks are generated and the claim refuses a wider row rather than
+playing it short a seat. The catalogue ships sixteen presets from two seats to eight, and eight is
+exactly the ceiling mapgen enforces, so every preset the ladder pairs is one a replica can claim.
+The seat count played is always the row's: every seat task is conditioned on `seat_count`.
 
 ### 4.2 The roster barrier
 

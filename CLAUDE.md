@@ -139,9 +139,15 @@ roster clock normally makes impossible — it is the lag case, not the common on
 means reading through the admin API's `data` envelope: `temp_data.m0.data.status`, not
 `temp_data.m0.status`, or every match is released for ever with both sides looking healthy.
 
-**A seat is a task.** The task list is fixed, so `MAX_SEATS` (4) `model_infer` tasks are generated,
+**A seat is a task.** The task list is fixed, so `MAX_SEATS` (8) `model_infer` tasks are generated,
 each conditioned on the seat existing, being live and not having forfeited — and the claim refuses
-a row with more seats than that rather than playing it short one.
+a row with more seats than that rather than playing it short one. **The seat count a match is played
+at is the row's**, which pair copied from the preset, which the map declares: a two-seat match runs
+two inferences a turn and skips six. `MAX_SEATS` is only the task list's ceiling, and it is the
+platform's — mapgen refuses a recipe above eight and the site draws two to eight — so no preset the
+ladder pairs is one a replica cannot claim. **The renew interval is clamped by the row's seat count**
+in both modes, `renew_every_n_turns × turn_ms × (seat_count + 1) ≤ lease_seconds`, because a turn can
+cost every seat's deadline plus the step.
 
 **The head is decoded here, not in the manifest** (decision R3). A `result` expression's root is the
 output tensors alone, so it cannot see the observation and cannot gather at the ants' cells: the
@@ -150,7 +156,7 @@ workflow asks for `raw: true` and does the gather itself, branching on the head'
 Rust, and `tinybrains conform` is what keeps them equal.
 
 **`devops/cli/src/wave.rs` is a deliberate second implementation** of five of this repo's rules — the
-explicit `{m, seat, action}` form, omission-as-no-op for a forfeited seat, cumulative strikes,
+explicit `{m, seat, action}` form, omission-as-no-op for a forfeited seat or one with no ants, cumulative strikes,
 `engine_rank + seat_count` for forfeit ranks, and the flat echoed refs — plus the head decode above.
 `tinybrains conform` diffs a replay envelope against a local re-run and is what keeps the two
 honest. A change to any of them here is a change there.

@@ -188,6 +188,26 @@ scripts/load-package.sh      replacement of objects tagged pkg:kalam
 
 ## Status
 
+**17 September 2026 (night) — an eliminated colony is not asked for a move.** Found on the first
+ladder with three seats or more: a colony with no ants stays in the match, `observe` still sends
+it a view with an empty `mine`, and its decoded action is `[]` — falsy, so the strike test read an
+answer as a miss. Five turns on, the dead seat was forfeited, ranked `engine_rank + seat_count`
+under seats it had outscored (an `open-5` seat on 4 points ranked below one on 2), and drawn as
+a disqualification. A two-seat match ends the turn a colony empties, so the ladder had never
+reached it. `seat_plays` now also requires an ant in the seat's view, so such a seat is neither
+inferred, struck nor charged a seat-turn. `devops/cli/src/wave.rs` never struck such a seat — its
+decoder answers `[]`, not null — so the two implementations disagreed on every match a colony
+died in; it now omits the seat too, and they agree again.
+
+**17 September 2026 (evening) — up to eight seats, and the lease sized by them.** `MAX_SEATS` is 8,
+the platform's ceiling, where it was 4: Ants now ships sixteen presets from two seats to eight, and a
+ceiling below that is a preset the ladder pairs and no replica claims. Nothing else about a match
+reads the constant — every seat task is conditioned on the row's `seat_count`, so a two-seat match
+costs what it did. `tb-match` is 65 tasks where it was 53. In `db` mode `renew_every_n_turns` is now
+clamped by the row's seat count as the gate's already was by a fixed three, and both now use
+`floor(lease_seconds × 1000 / ((seat_count + 1) × turn_ms))`: an eight-seat turn can cost nine
+deadlines. The runner gate's copy is Soma's (`soma-runner-claim`); the two were changed together.
+
 **16 September 2026 (merge) — the clocks Kalam's rows come from are Soma's.** `jodi` merged into
 `soma`, so the pair clock that inserts a match and the count clock that folds it now ship in the soma
 package. Nothing Kalam reads or writes changed: the rows, the grants and every statement are the
