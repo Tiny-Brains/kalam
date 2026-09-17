@@ -8,8 +8,8 @@ __pycache__/
 #
 # `scripts/gen-kalam.py` still writes channels/ and workflows/ locally, and is still what you run
 # while working here. It is just no longer what ships.
-channels/
-workflows/
+/channels/
+/workflows/
 
 # THE ENGINE IS NOT OURS TO KEEP A COPY OF. `plugins/tb-ants/` used to hold a vendored copy of the
 # cartridge -- component, plugin.json and cartridge.json, copied out of ants by a script -- so two
@@ -20,7 +20,7 @@ workflows/
 # `Dockerfile` now fetches the component straight from the cartridge's own GitHub release
 # (`ANTS_RELEASE`, the latest by default), so there is one copy and the two cannot disagree by
 # construction.
-plugins/
+/plugins/
 
 # Detached plugin signatures. A signature belongs to whoever holds the trust key, not to this
 # package -- load-package.sh reads PLUGIN_SIG_DIR, and devops keeps them under its own keys/. This
