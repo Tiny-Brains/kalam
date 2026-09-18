@@ -206,3 +206,10 @@ enabled = true
 # also means the disk does not fill with the record of matches that went fine.
 [trace_storage]
 mode = "sync"
+
+# Retention, pinned rather than inherited, and the same 24 hours Soma pins. Orion's default is 72,
+# and the cleanup task reads this one key for both `traces` and `cron_occurrences`. A runner's state
+# database holds nothing that outlives a match: the result went to Soma over the gate and the replay
+# to the bucket, so what is left here is only what was useful while the wave was running.
+[trace_queue]
+retention_hours = 24
