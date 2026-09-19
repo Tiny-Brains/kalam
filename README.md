@@ -122,6 +122,17 @@ docker compose up -d
 docker compose logs -f runner                           # wait for "==> loaded: …"
 ```
 
+**For a production deployment** (web's `docker-compose.prod.yml`, R2 behind it), use
+[`docker-compose.prod.yml`](docker-compose.prod.yml) with `.env.prod.example` instead:
+
+```sh
+cp .env.prod.example .env.prod                          # the same values; one R2_S3_ENDPOINT for both buckets
+docker compose -f docker-compose.prod.yml --env-file .env.prod up -d
+```
+
+That file never builds, never lets `RUNNER_ALLOW_PRIVATE_URLS` through, runs Orion in production mode
+(which refuses an admin key shorter than 32 characters), logs JSON and rotates the log.
+
 ### The machine
 
 - **Pin the image.** Set `KALAM_IMAGE=ghcr.io/tiny-brains/kalam:<version>`; compose refuses to start
@@ -270,7 +281,9 @@ docker/
   replica-db.toml.tmpl         db-mode config: run by nothing, kept for the rollback and web's check
 Dockerfile                     the runner image: orion-server, the package, the engine from an ants release
 docker-compose.yml             one runner service
+docker-compose.prod.yml        the same runner for a production deployment
 .env.example                   a runner's settings
+.env.prod.example              a production runner's settings
 .github/workflows/release.yml  v* tag → ghcr.io/tiny-brains/kalam
 workflows/, channels/          generated (gitignored)
 plugins/tb-ants/               optional local engine for lint (gitignored)

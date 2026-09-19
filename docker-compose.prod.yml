@@ -1,0 +1,107 @@
+# A TINYBRAINS RUNNER IN PRODUCTION. The production copy of docker-compose.yml: the same one
+# container, playing for a real deployment -- web's docker-compose.prod.yml, its object store on
+# Cloudflare R2.
+#
+#   cp .env.prod.example .env.prod
+#   docker compose -f docker-compose.prod.yml --env-file .env.prod pull
+#   docker compose -f docker-compose.prod.yml --env-file .env.prod up -d
+#
+# WHAT DIFFERS FROM docker-compose.yml, and why each one is a production setting:
+#
+#   no build        KALAM_IMAGE is a release; this file never builds a checkout
+#   no private URLs KALAM_ALLOW_PRIVATE_URLS is empty and NOT read from the environment: a redirect or a
+#                   DNS answer pointing this runner into the network behind it is refused
+#   production      ORION_ENVIRONMENT=production, which refuses an admin key under 32 characters
+#   logging         Orion logs JSON without the per-request and per-workflow INFO lines, most of them
+#                   this node's own roster calling its admin API; the log rotates
+#   one endpoint    R2_S3_ENDPOINT is both the models bucket and the replay store, as the deployment
+#                   signs them
+#
+# docker-compose.yml's header says what the service does and why it holds no platform credential.
+name: tinybrains-runner-prod
+
+services:
+  runner:
+    image: "${KALAM_IMAGE:?name a release, ghcr.io/tiny-brains/kalam:<version>, built from the ants release Soma declared}"
+    restart: unless-stopped
+    # PID 1 is tini, which reaps the self-load fork and forwards SIGTERM to Orion unchanged, so a
+    # draining match still gets its full shutdown_force_timeout_secs.
+    init: true
+
+    volumes:
+      # The deployment's plugin signatures, copied onto this machine.
+      - ${RUNNER_SIG_DIR:?the deployment's keys/signatures, copied onto this machine}:/sig:ro
+      - runner-models:/var/lib/orion/models
+
+    environment:
+      RUNNER_KEY: ${RUNNER_KEY:?mint one on the admin Runners page}
+      RUNNER_LABEL: ${RUNNER_LABEL:?how this machine appears on the Runners page}
+      # Derived from uname by the entrypoint when empty.
+      RUNNER_ARCH: ${RUNNER_ARCH:-}
+      RUNNER_NODE_VERSION: ${RUNNER_NODE_VERSION:-prod}
+
+      KALAM_API_URL: ${SOMA_URL:?the deployment, https://<its SITE_HOST>}
+      # ONE ADDRESS FOR BOTH BUCKETS: the deployment's R2_S3_ENDPOINT, character for character. The
+      # replay PUT is signed for it (SigV4 signs the host), and model GETs are signed with the key below.
+      MODELS_BUCKET: ${MODELS_BUCKET:-tinybrains-models}
+      MODELS_ENDPOINT: ${R2_S3_ENDPOINT:?the deployment's R2 S3 endpoint, exactly as its .env has it}
+      R2_ENDPOINT: ${R2_S3_ENDPOINT}
+      # An R2 API token with Object Read on the models bucket and nothing else.
+      MODELS_READ_ACCESS_KEY: ${MODELS_READ_ACCESS_KEY:?the deployment's read-only models token}
+      MODELS_READ_SECRET_KEY: ${MODELS_READ_SECRET_KEY:?the deployment's read-only models token}
+
+      # EMPTY, NOT ABSENT, as in docker-compose.yml: `kalam-db` and `kalam-blobs` must resolve to exist,
+      # and every task naming them is gated on `mode != "api"`.
+      KALAM_DB_URL: ""
+      R2_BUCKET: ""
+      R2_ACCESS_KEY: ""
+      R2_SECRET_KEY: ""
+
+      PLUGIN_SIG_DIR: /sig
+      TB_TRUST_PUBLIC_KEY: ${TB_TRUST_PUBLIC_KEY:?copy it from the deployment}
+      # THIS MACHINE'S OWN, not the deployment's: openssl rand -hex 32. Production refuses a shorter one.
+      ORION_ADMIN_KEY: ${ORION_ADMIN_KEY:?openssl rand -hex 32}
+      ORION_ADMIN_BEARER: Bearer ${ORION_ADMIN_KEY}
+      # NOT FROM THE ENVIRONMENT. Every address a production runner dials is public.
+      KALAM_ALLOW_PRIVATE_URLS: ""
+
+      ORION_ENVIRONMENT: production
+      # A runner serves no browser, but production refuses the `*` default: this names only its own
+      # loopback, where the operator reads /health.
+      ORION_CORS__ALLOWED_ORIGINS: http://127.0.0.1
+      # WHAT runner.toml.tmpl ALREADY SAYS, repeated for `orion-server compile`: the self-load compiles
+      # the package from defaults plus this environment, and production refuses admin_auth off.
+      ORION_ADMIN_AUTH__ENABLED: "true"
+      ORION_ADMIN_AUTH__API_KEYS: ${ORION_ADMIN_KEY}
+      ORION_LOGGING__FORMAT: json
+      RUST_LOG: ${ORION_RUST_LOG:-info,dataflow_rs::engine::workflow_executor=warn,orion::server::observability=warn}
+
+      ORION_VERSION: ${ORION_VERSION:-1.8.1}
+      ORION_SHUTDOWN_DRAIN_SECS: ${RUNNER_SHUTDOWN_DRAIN_SECS:-5}
+      ORION_SHUTDOWN_FORCE_SECS: ${RUNNER_SHUTDOWN_FORCE_SECS:-2700}
+      ORION_CRON_SHUTDOWN_SECS: ${RUNNER_CRON_SHUTDOWN_SECS:-2700}
+      RUNNER_CRON_WORKERS: ${RUNNER_CRON_WORKERS:-2}
+      RUNNER_MAX_CACHE_BYTES: ${RUNNER_MAX_CACHE_BYTES:-4294967296}
+      RUNNER_MAX_LOADED_BYTES: ${RUNNER_MAX_LOADED_BYTES:-2147483648}
+
+    # Must exceed drain + force, or Docker SIGKILLs a draining match and leaves its row `running`.
+    stop_grace_period: ${RUNNER_STOP_GRACE:-2760s}
+
+    # LOOPBACK ONLY: /health and /metrics for the operator, and nothing a network can reach.
+    ports:
+      - "127.0.0.1:${RUNNER_ADMIN_PORT:-8090}:8080"
+
+    logging:
+      driver: json-file
+      options:
+        max-size: ${LOG_MAX_SIZE:-20m}
+        max-file: ${LOG_MAX_FILE:-5}
+
+    deploy:
+      resources:
+        limits:
+          cpus: ${RUNNER_CPUS:-0}
+          memory: ${RUNNER_MEMORY:-0}
+
+volumes:
+  runner-models:
