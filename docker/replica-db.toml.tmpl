@@ -87,6 +87,11 @@ max_turns = 1000
 # played under. scripts/check/configs.sh fails if this file grows one back.
 refusal_ceiling = 5
 
+# How long a row must have waited since it was paired before its refusals can fail it, so the
+# ceiling measures time and not claims. Soma's refusal_grace_secs, which the gate reads; this copy is
+# the db-mode fallback and web's configs.sh keeps the two equal.
+refusal_grace_secs = 120
+
 replay_prefix = "replays"
 blob_endpoint = "${R2_ENDPOINT}"
 poll_secs = 5

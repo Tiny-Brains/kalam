@@ -199,8 +199,11 @@ UPDATE matches
 
 # --- claim, and it takes ONE row. $1 engine digest · $2 token · $3 lease seconds · $4 seats.
 #
-# Trials first, then oldest, and `FOR UPDATE SKIP LOCKED` so N replicas and N match lanes take
-# disjoint rows rather than queueing behind each other.
+# Trials first, always, then by refusals spent and age within each kind, and `FOR UPDATE SKIP LOCKED`
+# so N replicas and N match lanes take disjoint rows rather than queueing behind each other. A
+# refused row sinks behind a fresh one of its kind -- never a trial behind ranked matches: pair keeps
+# the queue topped up with fresh ones, so a trial that sank below them would wait while the ladder is
+# busy. The grace, not the order, is what keeps a new trial's refusals from failing it.
 #
 # `seat_count <= $4` is deliberate. A seat is a task and the task list is fixed, so a board wider
 # than MAX_SEATS must not be claimed: refusing to claim is visible in the queue, playing it short a
@@ -210,7 +213,7 @@ WITH pick AS MATERIALIZED (
     SELECT m.id FROM matches m
      WHERE m.status = 'pending' AND m.engine_digest = ($1)::text
        AND m.seat_count <= ($4)::int
-     ORDER BY (m.trial_version_id IS NOT NULL) DESC, m.created_at, m.id
+     ORDER BY (m.trial_version_id IS NOT NULL) DESC, m.refusals, m.created_at, m.id
      LIMIT 1 FOR UPDATE SKIP LOCKED)
 UPDATE matches m
    SET status = 'claimed', claim_token = ($2)::uuid,
@@ -246,12 +249,23 @@ SELECT json_build_object(
 # -- the row goes back to the queue with `refusals` spent, so a replica that is permanently behind
 # eventually fails the row rather than passing it round the fleet for ever. The roster clock is
 # what makes this rare; without the statement it would be a match played with one seat blind.
+#
+# $3 ceiling · $4 grace seconds. The ceiling fails the row only once it has also waited the grace
+# since it was paired: a count of claims alone is spent in seconds by the lanes on a new trial,
+# long before a roster has registered and activated its model. The gate's copy reads the season's
+# ceiling first; this one cannot (the `kalam` role reads no season), so it plays by [vars].
 K_RELEASE = """
 UPDATE matches
-   SET status = CASE WHEN refusals + 1 >= ($3)::int THEN 'failed' ELSE 'pending' END::match_status,
+   SET status = CASE WHEN refusals + 1 >= ($3)::int
+                      AND created_at <= now() - ($4)::int * interval '1 second'
+                     THEN 'failed' ELSE 'pending' END::match_status,
        refusals = refusals + 1, claim_token = NULL, lease_expires_at = NULL,
-       fault_reason = CASE WHEN refusals + 1 >= ($3)::int THEN 'MODEL_UNAVAILABLE' END,
-       closed_at = CASE WHEN refusals + 1 >= ($3)::int THEN now() END
+       fault_reason = CASE WHEN refusals + 1 >= ($3)::int
+                            AND created_at <= now() - ($4)::int * interval '1 second'
+                           THEN 'MODEL_UNAVAILABLE' END,
+       closed_at = CASE WHEN refusals + 1 >= ($3)::int
+                         AND created_at <= now() - ($4)::int * interval '1 second'
+                        THEN now() END
  WHERE claim_token = ($1)::uuid AND status = 'claimed' AND ($2)::boolean
 """
 
@@ -482,6 +496,10 @@ MATCH_TASKS = [
                     {">": [vars_("turn_ms"), 0]},
                     {">": [vars_("max_turns"), 0]},
                     {">": [vars_("refusal_ceiling"), 0]},
+                    # A grace of 0 is legal, so it cannot be tested with `>`; and `>=` alone passes a
+                    # missing value (`{">=": [null, 0]}` is true), hence the strict null test first.
+                    {"!==": [vars_("refusal_grace_secs"), None]},
+                    {">=": [vars_("refusal_grace_secs"), 0]},
                     {"!=": [vars_("replay_prefix"), None]},
                     {"!=": [vars_("blob_endpoint"), None]},
                     {"!=": [vars_("model_prefix"), None]},
@@ -609,7 +627,8 @@ MATCH_TASKS = [
 
     task("release", "A model this node cannot serve: back to the queue", db(
         "db_write", K_RELEASE,
-        [var("data.token"), True, vars_("refusal_ceiling")], "temp_data.released",
+        [var("data.token"), True, vars_("refusal_ceiling"), vars_("refusal_grace_secs")],
+        "temp_data.released",
     ), cond={"and": [NOT_READY, MODE_DB]}),
 
     task("release_api", "A model this node cannot serve: back to the queue", http(

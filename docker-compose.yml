@@ -1,8 +1,8 @@
 # A TINYBRAINS RUNNER. One container, and the only thing it needs to reach is a Soma.
 #
 #   cp .env.example .env                 # the Soma URL, RUNNER_KEY, the trust key and signatures
-#   docker compose up -d                 # the image published for the latest release
-#   docker compose up -d --build         # or this checkout, built
+#   docker compose up -d                 # KALAM_IMAGE: the release this runner plays
+#   docker compose up -d --build         # or this checkout, with KALAM_IMAGE=tinybrains/kalam:dev
 #   docker compose logs -f
 #
 # WHAT IT DOES NOT CONTAIN IS THE WHOLE ARGUMENT. There is no database, no object store, no Soma and
@@ -29,9 +29,12 @@ services:
   runner:
     build:
       context: .
-    # The published image unless built here. `up --build` tags this checkout's build with the same
-    # name, which is how a Kalam change is tried against a real Soma.
-    image: ${KALAM_IMAGE:-ghcr.io/tiny-brains/kalam:latest}
+    # NO DEFAULT, ON PURPOSE. The image is the engine, and `:latest` is whatever was pulled last on
+    # this machine -- a cached old one runs silently, claiming nothing because its engine is not the
+    # one Soma declared. Name a release (`ghcr.io/tiny-brains/kalam:<version>`, then `up -d`), or
+    # `tinybrains/kalam:dev` to build this checkout (`up -d --build`). `--build` tags the build with
+    # this name, so never pair it with a release tag: the checkout would pass for the release.
+    image: "${KALAM_IMAGE:?set KALAM_IMAGE in .env -- a release, ghcr.io/tiny-brains/kalam:<version>, or tinybrains/kalam:dev to build this checkout}"
     restart: unless-stopped
 
     # PID 1 is tini, which reaps the self-load fork and forwards SIGTERM to Orion unchanged, so a

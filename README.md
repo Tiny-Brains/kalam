@@ -14,7 +14,7 @@ owns the rules, and Orion runs the models.
 
 ```sh
 cp .env.example .env            # fill it in: see Configuration, or Run a runner
-docker compose up -d            # ghcr.io/tiny-brains/kalam:latest; add --build to run this checkout
+docker compose up -d            # KALAM_IMAGE, a release; or tinybrains/kalam:dev and --build
 docker compose logs -f runner
 ```
 
@@ -23,6 +23,7 @@ A healthy boot logs the architecture and engine it derived, then the self-load, 
 ```text
 ==> arch arm64
 ==> engine sha256:…
+==> 2 match lane(s), 3 cron workers (one is the roster's)
 ==> loading the kalam package into this node
 ==> loaded: tb.ants is live and <n> channels are active, this node can claim
 ```
@@ -39,7 +40,8 @@ README says):
 2. Copy `TB_TRUST_PUBLIC_KEY`, `MODELS_READ_ACCESS_KEY` and `MODELS_READ_SECRET_KEY` from web's `.env`.
 3. `RUNNER_KEY`: mint one on the admin Runners page.
 4. `ORION_ADMIN_KEY`: `openssl rand -hex 32`.
-5. `docker compose up -d --build`.
+5. `KALAM_IMAGE`: the release to test (web's `init.sh` prints the newest), then `docker compose up -d`;
+   or `KALAM_IMAGE=tinybrains/kalam:dev` and `docker compose up -d --build` for this checkout.
 
 **To run an unreleased engine**, build against an ants checkout's `dist/` with a machine-local
 `docker-compose.override.yml` (gitignored), and set `KALAM_IMAGE=tinybrains/kalam:dev` in `.env`:
@@ -67,9 +69,9 @@ Set in `.env`. [`docker-compose.yml`](docker-compose.yml) refuses to start witho
 | `ORION_ADMIN_KEY` | required | This node's own admin key (`openssl rand -hex 32`). Never the deployment's |
 | `RUNNER_LABEL` | `runner` | How this machine appears on the Runners screen. Two machines on one key are told apart by it |
 | `RUNNER_SIG_DIR` | `./keys/signatures` | The deployment's plugin signatures, mounted read-only |
-| `KALAM_IMAGE` | `ghcr.io/tiny-brains/kalam:latest` | The image, and so the engine. **Pin a version under a live season** |
+| `KALAM_IMAGE` | required | The image, and so the engine: a release (`ghcr.io/tiny-brains/kalam:<version>`), or `tinybrains/kalam:dev` built from this checkout |
 | `MODELS_BUCKET` | `tinybrains-models` | The models bucket's name |
-| `RUNNER_CRON_WORKERS` | `2` | Matches at once, across all lanes (Orion `cron.workers`) |
+| `RUNNER_CRON_WORKERS` | `2` | Matches at once: the match lanes loaded, at most the four the package ships. Orion's `cron.workers` is this plus one, for the roster |
 | `RUNNER_MAX_CACHE_BYTES` | 4 GiB | The on-disk model cache (the `runner-models` volume) |
 | `RUNNER_MAX_LOADED_BYTES` | 2 GiB | Model sessions held in memory at once |
 | `RUNNER_ALLOW_PRIVATE_URLS` | unset | `1` only against a local stack: lets the connectors reach private addresses |
@@ -122,9 +124,9 @@ docker compose logs -f runner                           # wait for "==> loaded: 
 
 ### The machine
 
-- **Pin the image.** Set `KALAM_IMAGE=ghcr.io/tiny-brains/kalam:<version>`. The image carries the
-  engine, and a runner whose engine digest is not `games.active_engine_digest` claims nothing, for
-  ever, with no error anywhere. `latest` moves with every release.
+- **Pin the image.** Set `KALAM_IMAGE=ghcr.io/tiny-brains/kalam:<version>`; compose refuses to start
+  without it. The image carries the engine, and a runner whose engine digest is not
+  `games.active_engine_digest` claims nothing, for ever, with no error anywhere.
 - **The architecture doesn't matter.** The cartridge is wasm32, so an arm64 Mac derives the same
   digest as an amd64 deployment. Images are published for linux/amd64 and linux/arm64.
 - **Disable sleep.** Use Energy Saver, or run the stack under `caffeinate -dimsu`. A sleeping host
@@ -133,9 +135,11 @@ docker compose logs -f runner                           # wait for "==> loaded: 
 - **Size the Docker VM** above `RUNNER_MAX_CACHE_BYTES + RUNNER_MAX_LOADED_BYTES` plus the runtime:
   about 8 GiB at the defaults, more if you raise `RUNNER_CRON_WORKERS`. Below that the model cache
   thrashes. Every eviction re-fetches an artifact over the WAN, and it shows only as slowness.
-- **Capacity is `RUNNER_CRON_WORKERS`.** It is shared by every channel, and the package's four
-  match lanes cap matches at once at four whatever it says. Start at 2 and watch lease renewals
-  before raising it: each match in flight keeps its seats' model sessions in memory. The engine is
+- **Capacity is `RUNNER_CRON_WORKERS`.** That many match lanes load, up to the four the package
+  ships, and Orion's pool is one worker larger so the roster clock always has one: with a shared
+  pool, long matches skip its ticks, new versions go unregistered, and every lane refuses their
+  trials. Start at 2 and watch lease renewals before raising it: each match in flight keeps its
+  seats' model sessions in memory. The engine is
   wasm and the models are ONNX on CPU, so cores matter more than clock speed.
 - **Bandwidth is small and bursty.** One replay PUT per match (about 58 KiB for a 549-turn match),
   one artifact GET per cache miss (at most 64 MiB, `max_artifact_bytes`), and the idle poll: a token
@@ -289,7 +293,12 @@ plugins/tb-ants/               optional local engine for lint (gitignored)
   healthy.
 - **A seat this node can't serve is released, never played.** Before a match starts, each seat's
   model is checked against this node's admin API. A seat whose model is not `active` sends the row
-  back with a refusal spent, and after `refusal_ceiling` refusals the row fails `MODEL_UNAVAILABLE`.
+  back with a refusal spent. The row fails `MODEL_UNAVAILABLE` only when the ceiling is spent AND it
+  has waited Soma's `refusal_grace_secs` since it was paired, since a count of claims alone is spent
+  in seconds by the lanes on a new trial. Trials are claimed before ranked matches, and within each
+  kind a refused row after the fresh ones.
+- **The roster always has a worker.** Orion's pool is the match lanes plus one, and only
+  `RUNNER_CRON_WORKERS` lanes load, so no number of long matches can skip a roster tick.
 - **Game state stays opaque.** No workflow interprets `wave_state`, an observation, an action or a
   ref. The policy head is the one tensor the platform reads, because a manifest cannot decode it.
 - **A match's terms come from its season, on the claim.** That includes the strike ceiling, which is
@@ -311,6 +320,9 @@ plugins/tb-ants/               optional local engine for lint (gitignored)
   exercised.
 - `tb-match-run` keeps sweeping to its loop max (1010) after the match finishes, with every task
   skipped.
+- A new version's first registration logs an ERROR: the roster's existence check is a GET that
+  404s, and so is the barrier's check while a claimed trial waits for it. Orion 1.8.1's `http_call`
+  has no accepted-status option, and the model list is paginated, so both stay per-model GETs.
 - Orion's `Message.audit_trail` keeps old and new values for every task execution, and there is no
   setting to turn it off.
 - Every cron run mints a ten-minute token and uses it once. A longer-lived token would halve an idle

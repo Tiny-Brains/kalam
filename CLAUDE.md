@@ -56,6 +56,11 @@ identically, not just recorded.
   gives one match in flight per lane. Their shared `config` is `shared/kalam.json`. That file is a
   shared document the admin API does not accept, so `load-package.sh` runs `orion-server compile`
   and then `package apply`.
+- **The worker pool is the lanes plus one, and the one is the roster's.** Orion has one cron pool
+  per node and a match holds its worker for the whole match, so `entrypoint.sh` loads only
+  `RUNNER_CRON_WORKERS` lanes (`stage-set.py --drop` leaves the rest out) and sizes `cron.workers`
+  one larger. Never size the pool to the lanes: long matches then skip the roster's ticks, and every
+  lane refuses the trials of versions it never registers.
 - **`group_runs()` folds consecutive tasks that share a condition into a task group.** A group's
   condition is evaluated once, and a falsy one skips the span *without evaluating the members'*,
   which is what makes stripping the members' conditions equivalent.

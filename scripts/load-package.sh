@@ -61,8 +61,22 @@ PRIVATE=$([ "${KALAM_ALLOW_PRIVATE_URLS:-0}" = "1" ] && echo true || echo false)
 #
 # The guard is about egress to somewhere else. A node calling itself is not that.
 
+# THE LANES THIS NODE PLAYS. entrypoint.sh sets KALAM_MATCH_LANES from RUNNER_CRON_WORKERS and sizes
+# Orion's worker pool at one more, for the roster; a lane above the count is left out of the set, so
+# the pool can never be filled by matches alone. Unset loads every lane the package ships.
+DROP=""
+if [ -n "${KALAM_MATCH_LANES:-}" ]; then
+  for f in channels/tb-match-*.json; do
+    n=${f#channels/tb-match-}
+    n=${n%.json}
+    if [ "$n" -gt "$KALAM_MATCH_LANES" ]; then DROP="$DROP --drop=$f"; fi
+  done
+fi
+
 echo "==> staging the set"
-VERSION=$(python3 scripts/stage-set.py . "$STAGE" \
+# $DROP is deliberately unquoted: it is zero or more whole arguments, none with a space in it.
+# shellcheck disable=SC2086
+VERSION=$(python3 scripts/stage-set.py . "$STAGE" $DROP \
   "kalam-db=allow_private_urls=$PRIVATE" \
   "kalam-models=allow_private_urls=$PRIVATE" \
   "kalam-blobs=allow_private_urls=$PRIVATE" \

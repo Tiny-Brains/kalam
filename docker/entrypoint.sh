@@ -52,6 +52,30 @@ fi
 export KALAM_ENGINE_DIGEST
 echo "==> engine $KALAM_ENGINE_DIGEST"
 
+# ---------------------------------------------------------------- lanes and workers
+# RUNNER_CRON_WORKERS IS MATCHES AT ONCE, and it is spent as LANES, not as a bigger pool. Orion has
+# one cron worker pool per node and a match holds its worker for the whole match, so a pool shared
+# by four lanes and the roster clock gives the roster a worker only when a lane is idle -- and its
+# ticks are skipped (misfire `skip`) whenever it is not. A new version then goes unregistered while
+# every lane refuses its trial. So exactly this many lanes are loaded (load-package.sh drops the
+# rest before compile), each `forbid` on its own key and so never holding more than one worker, and
+# Orion gets one worker more: the roster's, which no match can take.
+lanes="${RUNNER_CRON_WORKERS:-2}"
+case "$lanes" in
+  ''|*[!0-9]*) echo "RUNNER_CRON_WORKERS must be a whole number of matches, got '$lanes'" >&2; exit 1 ;;
+esac
+[ "$lanes" -ge 1 ] || { echo "RUNNER_CRON_WORKERS must be at least 1" >&2; exit 1; }
+shipped=$(ls "$PKG"/channels/tb-match-*.json 2>/dev/null | wc -l | tr -d ' ')
+[ "$shipped" -ge 1 ] || { echo "no match lanes under $PKG/channels" >&2; exit 1; }
+if [ "$lanes" -gt "$shipped" ]; then
+  echo "==> RUNNER_CRON_WORKERS=$lanes, but the package ships $shipped match lanes: playing $shipped"
+  lanes=$shipped
+fi
+KALAM_MATCH_LANES=$lanes
+KALAM_CRON_WORKERS=$((lanes + 1))
+export KALAM_MATCH_LANES KALAM_CRON_WORKERS
+echo "==> $KALAM_MATCH_LANES match lane(s), $KALAM_CRON_WORKERS cron workers (one is the roster's)"
+
 echo "==> migrating state"
 orion-server -c "$CFG" migrate > /dev/null
 
