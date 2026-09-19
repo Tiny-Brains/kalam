@@ -8,7 +8,7 @@
 # including the `$from` constants in shared/kalam.json, which the admin API does not accept -- into
 # ONE promotion artifact, and `orion-server package apply` stages it, activates in dependency order
 # and reloads the engine once. That is idempotent by content: an unchanged package is a no-op, and
-# unlike the delete-by-tag-then-POST loop it replaces, nothing is ever briefly absent.
+# nothing is ever briefly absent.
 #
 # ONE REPLICA PER RUN. Each replica is its own Orion with its own state database and there is no
 # epoch bus between them, so each node runs this against itself: docker/entrypoint.sh does, at boot.
@@ -16,7 +16,8 @@
 # Environment:
 #   ORION_ADMIN                admin API base (default http://127.0.0.1:8080/api/v1/admin)
 #   ORION_ADMIN_API_KEY        admin credential, when admin_auth is enabled
-#   KALAM_ALLOW_PRIVATE_URLS   1 to set allow_private_urls on the database and loader connectors
+#   KALAM_ALLOW_PRIVATE_URLS   1 to set allow_private_urls on every connector but kalam-orion
+#   KALAM_API_URL              Soma's base URL, for the kalam-api connector
 #   KALAM_ORION_ADMIN          this node's own admin API, for the kalam-orion connector
 #   R2_ENDPOINT                the replay store, for the kalam-blobs-put connector
 #   PLUGIN_SIG_DIR             detached Ed25519 signatures, named <component>.sig

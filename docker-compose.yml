@@ -93,7 +93,8 @@ services:
       # cron channel holds no schedule. Set to the empty string they RESOLVE, so `kalam-db` and
       # `kalam-blobs` exist, load, and are never reached: every task that names them is gated on
       # `mode != "api"`. ALL FOUR, because a connector needs EVERY `env://` it names to resolve.
-      # When N10 deletes the package's `db` branch, these four lines go with it.
+      # When the package's `db` branch goes (CLAUDE.md, *Removing db mode*), these four lines go
+      # with it.
       KALAM_DB_URL: ""
       R2_BUCKET: ""
       R2_ACCESS_KEY: ""

@@ -3,22 +3,15 @@ __pycache__/
 
 # THE BUILD OUTPUT IS NOT COMMITTED. It is generated into the runner image `Dockerfile` builds --
 # `ghcr.io/tiny-brains/kalam:<version>` published -- which loads it into its own node at boot.
-# `connectors/` is the authored part and is committed.
-#
-# `scripts/gen-kalam.py` still writes channels/ and workflows/ locally, and is still what you run
-# while working here. It is just no longer what ships.
+# `connectors/` and `shared/` are the authored part and are committed. `scripts/gen-kalam.py` writes
+# channels/ and workflows/ locally for the checks.
 /channels/
 /workflows/
 
-# THE ENGINE IS NOT OURS TO KEEP A COPY OF. `plugins/tb-ants/` used to hold a vendored copy of the
-# cartridge -- component, plugin.json and cartridge.json, copied out of ants by a script -- so two
-# committed copies of one component existed and could drift. When they did NOTHING ERRORED: the
-# ladder played a component ants does not ship, with a viewer built against the other, and it
-# happened once from an edit that changed no behaviour at all.
-#
-# `Dockerfile` now fetches the component straight from the cartridge's own GitHub release
-# (`ANTS_RELEASE`, the latest by default), so there is one copy and the two cannot disagree by
-# construction.
+# THE ENGINE IS NOT OURS TO KEEP A COPY OF. A committed copy of the cartridge can drift from the
+# one ants ships, and NOTHING ERRORS when it does: the ladder plays a component ants does not ship.
+# `Dockerfile` fetches the component straight from the cartridge's own GitHub release
+# (`ANTS_RELEASE`, the latest by default). A local plugins/tb-ants/ is only for linting.
 /plugins/
 
 # Detached plugin signatures. A signature belongs to whoever holds the trust key, not to this

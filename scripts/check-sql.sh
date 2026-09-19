@@ -5,9 +5,9 @@
 #
 # Kalam's statements live twice: readably in scripts/gen-kalam.py, and inlined as single-line JSON
 # strings in the workflow it generates. This checks the SHIPPED copy -- it pulls each `query` out of
-# workflows/*.json and asks Postgres to parse and plan it, so a statement hand-edited in the JSON,
-# or a generator run that was never committed, fails here rather than on a cron tick. What each
-# statement DOES is soma/scripts/verify/run.sh's walk, and what the WAVE does is a real wave.
+# workflows/*.json and asks Postgres to parse and plan it, so a statement hand-edited in the JSON
+# fails here rather than on a cron tick. What each statement DOES is soma/scripts/verify/run.sh's
+# walk, and what a match does is a real match.
 #
 # Kalam ships no migrations: the schema is Soma's and Kalam holds a narrow role on it. MIGRATIONS is
 # relative because the repos sit beside each other; override it when they do not.
@@ -47,8 +47,8 @@ for path in sys.argv[1:]:
 PY
 
 # The other half of "this statement will work": a role can PREPARE a statement it would be refused
-# at execution time, so check that the columns the wave writes are the columns it is granted.
-echo "==> the kalam role's grants cover what the wave writes"
+# at execution time, so check that the columns a match writes are the columns it is granted.
+echo "==> the kalam role's grants cover what a match writes"
 psql -d "$SCRATCH" -q -v ON_ERROR_STOP=1 <<'SQL'
 DO $$
 DECLARE missing text;
@@ -69,9 +69,9 @@ BEGIN
     IF has_column_privilege('kalam', 'matches', 'rated_at', 'UPDATE') THEN
         RAISE EXCEPTION 'the kalam role can write matches.rated_at -- counting is Soma''s';
     END IF;
-    -- The roster clock reads model_versions, and reads FOUR COLUMNS of it (decision R8). The
-    -- absences are the point: a replica that can name a model still cannot see what class it is
-    -- in, what it was measured at, or why it was refused.
+    -- The roster clock reads model_versions, and only the columns it needs. The absences are
+    -- the point: a replica that can name a model still cannot see what class it is in, what it
+    -- was measured at, or why it was refused.
     SELECT string_agg(c, ', ') INTO missing
       FROM unnest(ARRAY['id','status','manifest','artifact_key','weights_hash','created_at']) AS c
      WHERE NOT has_column_privilege('kalam', 'model_versions', c, 'SELECT');

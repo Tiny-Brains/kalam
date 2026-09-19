@@ -7,10 +7,11 @@
 # connection string, no bucket secret and no admin token for anything but this node's own loopback
 # API. What a machine needs to play rated matches is a key, a label, and the engine it plays.
 #
-# AND THE NUMBERS A MATCH IS PLAYED UNDER ARE NOT HERE EITHER. The retired `db`-mode config carried
-# turn_ms, max_turns, lease_seconds, renew_every_n_turns, refusal_ceiling, replay_prefix and
-# model_prefix, because a `db`-mode replica had to: the `kalam` role is granted neither `seasons` nor
-# `games`, so it could not read what the season says. A runner reads none of them -- every one arrives on the claim, from the season that owns the match (docs/decisions.md N18).
+# AND THE NUMBERS A MATCH IS PLAYED UNDER ARE NOT HERE EITHER. The `db`-mode config
+# (replica-db.toml.tmpl) carries turn_ms, max_turns, lease_seconds, renew_every_n_turns,
+# refusal_ceiling, replay_prefix and model_prefix, because a `db`-mode replica has to: the `kalam`
+# role is granted neither `seasons` nor `games`, so it cannot read what the season says. A runner
+# reads none of them -- every one arrives on the claim, from the season that owns the match.
 # They are absent rather than commented out ON PURPOSE: a value that is present and ignored is a
 # value an operator will eventually tune, and then wonder why nothing changed.
 
@@ -38,8 +39,8 @@ auto_migrate = true
 
 [vars]
 # NOT A VARIABLE. A runner has one mode; `db` needs a database credential, which is the thing this
-# whole file exists not to hold. The package still carries its `db` branch until N10 deletes it; no
-# image runs it.
+# whole file exists not to hold. The package still carries its `db` branch as a rollback; no image
+# runs it.
 mode = "api"
 
 # The engine this runner plays, and the only rows its match clock may claim. DERIVED by
@@ -70,7 +71,7 @@ runner_key = "${RUNNER_KEY}"
 #
 # NO NESTED DEFAULT. `${A:-${B}}` is not substituted as one expression here -- the inner `}` closes
 # the outer reference and the literal `}` is left on the value, registering a runner called
-# `mac-mini}`. Found twice while this track was built. A deployment sets the name it wants.
+# `mac-mini}`. A deployment sets the name it wants.
 runner_label = "${RUNNER_LABEL:-runner}"
 
 # Reported at token exchange and never enforced -- it answers "what is that machine" on the Runners
@@ -79,8 +80,8 @@ runner_label = "${RUNNER_LABEL:-runner}"
 arch         = "${RUNNER_ARCH}"
 node_version = "${RUNNER_NODE_VERSION:-dev}"
 
-# How many matches this runner plays at once. The bound that matters is cron.max_concurrent_runs
-# below; this is the per-run seat fan-out and every Ants map is two-player.
+# Read by nothing in the package: the lane count is the tb-match channels the generator emits, and
+# cron.workers below is this node's bound on matches at once.
 match_concurrency = 4
 
 # How often a row may be refused because this node cannot serve a seat's model before it fails as
@@ -93,9 +94,9 @@ refusal_ceiling = 5
 # NO poll_secs. The db-mode config carried one and NOTHING READ IT -- the poll rate is the cron
 # channel's `schedule` (`*/5 * * * * *`), which is package content, versioned with the channel and
 # the same on every node that loads it. A runner cannot slow its own polling from this file, and
-# pretending otherwise with a var the workflow never looks at is worse than not offering it. N9 is
-# the open question, and it is a question about the PACKAGE: an idle poll is TWO calls over the WAN
-# now, a token exchange and a claim, and four match channels each make it.
+# pretending otherwise with a var the workflow never looks at is worse than not offering it. Polling
+# less is a question about the PACKAGE: an idle poll is TWO calls over the WAN, a token exchange and
+# a claim, and every match lane makes it.
 
 # Which connector holds the model bytes. The bucket is public-read and the key below can only GET
 # from it, so this is the one credential a runner holds and it buys read access and no authority.
@@ -124,11 +125,11 @@ enabled = true
 #
 # THE SIGNATURE IS NOT IN THE PACKAGE IMAGE and cannot be: it belongs to whoever holds the trust
 # key, and the image is shared by every deployment that pulls the tag. The operator copies the
-# deployment's keys/signatures/ onto this machine -- docs/deployment.md §11 is the step.
+# deployment's keys/signatures/ onto this machine -- README, *Run a runner*, is the step.
 [plugins.trust]
 public_keys = ["${TB_TRUST_PUBLIC_KEY}"]
 
-# ONNX AS A GOVERNED ENTITY (decision R1). A runner registers, admits and activates every model its
+# ONNX AS A GOVERNED ENTITY. A runner registers, admits and activates every model its
 # `tb-roster` clock is told about -- over the gate, in `api` mode, so it never reads model_versions
 # itself -- then plays them with `model_infer`. There is no sidecar and no loader: the artifact is
 # fetched from the bucket by connector and digest, HASHED AGAINST WHAT THE ROSTER DECLARED, and
@@ -138,7 +139,7 @@ enabled = true
 
 # Where verified artifacts are kept between loads. THIS MACHINE'S DISK, never shared. Size the
 # Docker VM above max_cache_bytes + max_loaded_bytes or the runner will thrash on every eviction --
-# docs/deployment.md §11 is the sum.
+# README, *Run a runner*, has the sum.
 cache_dir = "/var/lib/orion/models"
 max_cache_bytes  = ${RUNNER_MAX_CACHE_BYTES:-4294967296}
 max_loaded_bytes = ${RUNNER_MAX_LOADED_BYTES:-2147483648}
@@ -185,12 +186,11 @@ shutdown_timeout_secs = ${ORION_CRON_SHUTDOWN_SECS:-2700}
 workers = ${RUNNER_CRON_WORKERS:-2}
 
 [engine]
-# Bounds the match workflow's per-turn loop, well above any season's max_turns (the schema caps
-# that at 100000, and a season that asks for it will hit this first -- deliberately, because a
-# hundred thousand turns on a desk is a runaway whatever the season says).
+# Must sit above tb-match-run's own loop max, which is what actually bounds a match's sweeps (and
+# so its turns).
 max_loop_iterations = 10000
 
-# THE FAIRNESS CONTROL, and the only one an adapter is judged by at play (decision R6). One
+# THE FAIRNESS CONTROL, and the only one an adapter is judged by at play. One
 # evaluation -- one competitor's input adapter -- may spend this many operations. MUST EQUAL soma's
 # budgets.adapter_ops_max, which is what admission judges by, or a model is admitted under one
 # ceiling and played under another. web's scripts/check/configs.sh checks it.
@@ -211,6 +211,6 @@ mode = "sync"
 # Retention, pinned rather than inherited, and the same 24 hours Soma pins. Orion's default is 72,
 # and the cleanup task reads this one key for both `traces` and `cron_occurrences`. A runner's state
 # database holds nothing that outlives a match: the result went to Soma over the gate and the replay
-# to the bucket, so what is left here is only what was useful while the wave was running.
+# to the bucket, so what is left here is only what was useful while the match was running.
 [trace_queue]
 retention_hours = 24

@@ -1,15 +1,16 @@
-# RETIRED, AND KEPT FOR ONE REASON. No image and no compose file runs a `db`-mode replica since N25:
-# this repository ships a runner, configured by docker/runner.toml.tmpl, and the image does not copy
-# this file. The package still carries its `db` branch until N10 deletes it, and web's
+# RETIRED, AND KEPT FOR ONE REASON. No image and no compose file runs a `db`-mode replica: this
+# repository ships a runner, configured by docker/runner.toml.tmpl, and the image does not copy
+# this file. The package still carries its `db` branch as a rollback, and web's
 # scripts/check/configs.sh holds this file in step with Soma's template so that branch is not a
-# rollback to numbers nobody kept. Delete this file, that check's §1c and the branch together.
+# rollback to numbers nobody kept. Delete this file, that check's execution-contract block and the
+# branch together (CLAUDE.md, *Removing db mode*).
 #
-# Orion config for a KALAM REPLICA: the wave, and nothing else. Requires 1.8.1. The Soma half is
-# soma.toml.tmpl.
+# Orion config for a KALAM REPLICA: the match clocks, and nothing else. Requires 1.8.1. The Soma
+# half is soma.toml.tmpl.
 #
-# One of these per replica, and NO [cluster] block: a shared `forbid` row would make the wave a
-# fleet-wide singleton, so exactly one replica would ever play while the other N-1 polled a held
-# row looking perfectly healthy. Kalam's fence is the leased claim on `matches`, not Orion's, so
+# One of these per replica, and NO [cluster] block: a shared `forbid` row would make each match
+# lane a fleet-wide singleton, so exactly one replica would ever play while the other N-1 polled a
+# held row looking perfectly healthy. Kalam's fence is the leased claim on `matches`, not Orion's, so
 # nothing is lost. scripts/check/configs.sh asserts the absence.
 
 [server]
@@ -18,8 +19,8 @@ port = 8080
 
 # NO data_mounts: a replica binds no route, it is cron only -- which is what the drain numbers turn
 # on. drain is an unconditional FIXED sleep, so it buys a routeless node nothing; force is the REAL
-# outer bound on a draining wave, because the cron worker is a supervised task and the server key
-# is its deadline. A scale-down costs one WAVE, not one timeout.
+# outer bound on a draining match, because the cron worker is a supervised task and the server key
+# is its deadline. A scale-down costs one MATCH, not one timeout.
 shutdown_drain_secs         = ${ORION_SHUTDOWN_DRAIN_SECS:-5}
 shutdown_force_timeout_secs = ${ORION_SHUTDOWN_FORCE_SECS:-2700}
 
@@ -57,21 +58,18 @@ runner_key   = "${KALAM_RUNNER_KEY:-}"
 #
 # NO NESTED DEFAULT. `${A:-${B}}` is not substituted as one expression here -- the inner `}` closes
 # the outer reference and the literal `}` is left on the value, which registers a runner called
-# `kalam-2}`. Found the first time this ran. A deployment sets the name it wants.
+# `kalam-2}`. A deployment sets the name it wants.
 runner_label = "${KALAM_RUNNER_LABEL:-kalam}"
 # Reported at token exchange and never enforced -- it answers "what is that machine" and nothing
 # else. The cartridge is wasm32, so the engine digest does NOT vary by host architecture.
 #
 # DERIVED by entrypoint.sh from `uname -m`, under the same name a standalone runner uses: it is a
-# fact about the machine, not about the role. It used to default to `amd64` and every replica on
-# this arm64 laptop reported amd64 on the Runners screen -- a label that lies in exactly the
-# situation the screen exists for.
+# fact about the machine, not about the role, and a hand-typed one is a label that lies in exactly
+# the situation the Runners screen exists for.
 arch         = "${RUNNER_ARCH}"
 node_version = "${KALAM_NODE_VERSION:-dev}"
 
-# ONE MATCH PER RUN (decision R7). Every Ants map is two-player, so a wave of K rows existed to
-# amortise one batched inference call across many seats -- a number that is two. Concurrency is now
-# concurrent runs of tb-match, bounded by cron.max_concurrent_runs below.
+# Read by nothing in the package: the lane count is the tb-match channels the generator emits.
 match_concurrency = 4
 
 renew_every_n_turns = 30
@@ -85,7 +83,7 @@ max_turns = 1000
 # a crash, a refusal is a roster that has not caught up.
 #
 # THE STRIKE CEILING IS DELIBERATELY NOT HERE. Pair stamps matches.strike_ceiling from the season
-# (decision 54) and the match clock reads it off the row, so a trial is judged by the rule it was
+# and the match clock reads it off the row, so a trial is judged by the rule it was
 # played under. scripts/check/configs.sh fails if this file grows one back.
 refusal_ceiling = 5
 
@@ -94,7 +92,7 @@ blob_endpoint = "${R2_ENDPOINT}"
 poll_secs = 5
 
 # What the roster clock tells this node its models are called and where their bytes are. The model
-# id is derived from the version id (R9) and never stored: `tb.v` plus the uuid.
+# id is derived from the version id and never stored: `tb.v` plus the uuid.
 model_prefix  = "tb.v"
 models_bucket_connector = "kalam-models"
 
@@ -117,7 +115,7 @@ enabled = true
 [plugins.trust]
 public_keys = ["${TB_TRUST_PUBLIC_KEY}"]
 
-# ONNX AS A GOVERNED ENTITY (decision R1). A replica registers, admits and activates every model
+# ONNX AS A GOVERNED ENTITY. A replica registers, admits and activates every model
 # its `tb-roster` clock finds verified or active in the shared schema, then plays them with
 # `model_infer`. There is no sidecar and no loader: the artifact is fetched from the bucket by
 # connector and digest, hashed against what the row declares, and held in an LRU session cache.
@@ -166,18 +164,15 @@ shutdown_timeout_secs = ${ORION_CRON_SHUTDOWN_SECS:-2700}
 # Bounds the match workflow's per-turn loop, well above max_turns: hitting this is a runaway.
 max_loop_iterations = 10000
 
-# THE FAIRNESS CONTROL, and the only one an adapter is judged by at play (decision R6). One
+# THE FAIRNESS CONTROL, and the only one an adapter is judged by at play. One
 # evaluation -- one competitor's input adapter -- may spend this many operations. Measured against
 # the ported reference adapter: 86,051 at 64x96, 129,059 at 96x96, 229,415 at 128x128, which is
 # ~14 per cell and nearly flat in ant count. MUST EQUAL soma's budgets.adapter_ops_max, which is
 # what admission judges by, or a model is admitted under one ceiling and played under another.
 ops_budget = 1000000
 
-# The wave channel carries `errors_only: true`, so a clean wave of hundreds of turns writes no
-# trace -- the only reason `sync` is affordable on ~3000 task executions per run.
 # PROMETHEUS, ON THE MAIN LISTENER. With this off, `/metrics` is not registered at all and 404s
-# like any unknown route -- which is what left the Orion console's Operations dashboard (request
-# rate, error rate, latency percentiles) permanently blank even once its auth was fixed.
+# like any unknown route, and the Orion console's Operations dashboard stays blank.
 #
 # `bind_addr` is deliberately UNSET, so `/metrics` stays on the main listener where `admin_auth`
 # guards it. A dedicated listener would be unauthenticated by design, and this node's admin plane
@@ -186,5 +181,7 @@ ops_budget = 1000000
 [metrics]
 enabled = true
 
+# The match channels carry `errors_only: true`, so a clean match of hundreds of turns writes no
+# trace -- the only reason `sync` is affordable on ~3000 task executions per run.
 [trace_storage]
 mode = "sync"

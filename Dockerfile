@@ -67,7 +67,7 @@ COPY --from=ants-release /artifacts/ /
 
 # ---- the channel and its workflow --------------------------------------------
 #
-# `scripts/gen-kalam.py` writes both. The wave's statements live readable in the generator and are
+# `scripts/gen-kalam.py` writes both. The match's statements live readable in the generator and are
 # inlined as single-line JSON strings, because SQL written that way by hand is unreviewable --
 # `scripts/check-sql.sh` checks the SHIPPED copy against a real Postgres for exactly that reason.
 FROM --platform=$BUILDPLATFORM python:${PYTHON_VERSION}-alpine AS declarations

@@ -2,19 +2,18 @@
 """Generate Kalam's channels and workflows.
 
 The SQL and the JSONLogic are unreadable inline in JSON and readable here, so this file is the
-source and `workflows/*.json` + `channels/*.json` are build output. `Dockerfile` regenerates them
-into the artifact image and runs `--check` straight after, so a hand-edited file is a failed build.
+source and `workflows/*.json` + `channels/*.json` are build output, gitignored. `Dockerfile`
+regenerates them into the runner image, so only what this file produces ever ships.
 
-Two clocks since the 1.8.1 rebuild (docs/decisions.md, the R-series):
+Two clocks:
 
   tb-roster   reconciles this node's model set with the shared schema. Every version the ladder
               says is verified or active is registered here, admitted here, and activated here.
-              No clock ever calls a replica: the database is the only channel (R8).
+              No clock ever calls a replica: the database is the only channel.
 
   tb-match    claims ONE queued row and plays it turn by turn -- observe, one `model_infer` per
-              seat, step -- and finishes it in place. The wave is gone: every Ants map is
-              two-player, so K rows per claim existed to amortise one batched inference call over
-              a number that is two (R7).
+              seat, step -- and finishes it in place. A replica's concurrency is its match lanes:
+              one channel per lane, one match in flight on each.
 
 Run with no arguments to write the files; `--check` fails if what is on disk has drifted.
 """
@@ -32,7 +31,7 @@ ENGINE = "tb.ants"
 
 # How many seats a match may have and still be claimed here. The seat count a match is PLAYED at is
 # never this: it is the row's `seat_count`, which pair's insert read off the board the match is played
-# on (N28) -- every seat task below is conditioned on it, so a two-seat match runs two inferences a turn and
+# on -- every seat task below is conditioned on it, so a two-seat match runs two inferences a turn and
 # skips the rest. This is only the ceiling of the fixed task list, and it is the platform's: mapgen's
 # `MAX_SEATS` refuses a recipe above eight, and the site draws two to eight. A ceiling below that is
 # a board the ladder pairs and no replica can claim; the claim refuses anything wider rather than
@@ -42,7 +41,7 @@ MAX_SEATS = 8
 
 # The action alphabet, and the ONE place the platform knows it. It is the cartridge's, published in
 # the competitor guide's *What your model answers* -- a per-cell head's channel order is part of the
-# game's contract, not the competitor's (R3).
+# game's contract, not the competitor's.
 DIRS = ["N", "E", "S", "W", "-"]
 
 
@@ -111,8 +110,9 @@ def mapping(*pairs) -> dict:
     -- so `{"logic": null}` writes nothing at all and the slot keeps the PREVIOUS sweep's value.
     That is the opposite of what a clear is for, and it is silent. `False` is falsy to every
     condition that tests the slot, and reading a path through it yields null exactly as an unset
-    slot does, so the intent survives and the write actually happens. Found 15 September 2026, when
-    tb-roster stopped registering any model on a node that already had one."""
+    slot does, so the intent survives and the write actually happens. Get it wrong and tb-roster's
+    per-item slots keep the previous item's values, so a node that already has one model registers
+    no other."""
     return {"name": "map", "input": {
         "mappings": [{"path": p, "logic": False if l is None else l} for p, l in pairs]}}
 
@@ -170,17 +170,18 @@ def sift(source: dict, carried: dict, test=None, element=None, items=None,
 
 
 def model_id(version_expr: dict) -> dict:
-    """The Orion model id of a version (R9). Derived, never stored: an Orion label may not begin
+    """The Orion model id of a version. Derived, never stored: an Orion label may not begin
     with a digit, so a bare uuid is refused and `tb.v` is the prefix that fixes it."""
     return {"cat": [vars_("model_prefix"), version_expr]}
 
 
 # ======================================================================= the statements
 #
-# Every one is soma/docs/schema.md §4, and every one is conditioned on the claim token so a stale
-# attempt updates nothing.
+# The `db`-mode copies of the statements Soma's runner gate runs (`soma/workflows/soma-runner-*.json`).
+# Nothing compares the two, so a change to one is made in both. Every one is conditioned on the
+# claim token so a stale attempt updates nothing.
 
-# --- 4.1 reap: its own statement rather than a CTE inside the claim, because a CTE's writes are
+# --- reap: its own statement rather than a CTE inside the claim, because a CTE's writes are
 # invisible to the claim in the same snapshot and a reaped row would wait one more poll.
 K_REAP = """
 UPDATE matches
@@ -191,17 +192,14 @@ UPDATE matches
  WHERE status IN ('claimed', 'running') AND lease_expires_at < now()
 """
 
-# --- 4.2 claim, and it takes ONE row. $1 engine digest · $2 token · $3 lease seconds · $4 seats.
+# --- claim, and it takes ONE row. $1 engine digest · $2 token · $3 lease seconds · $4 seats.
 #
-# What went with the wave: the resident-weights affinity ordering (an optimisation of a residency
-# model that no longer exists -- the session cache loads on demand) and the board grouping (which
-# existed so one `observe` call could serve a whole wave of one board). What stays: trials first,
-# then oldest, and `FOR UPDATE SKIP LOCKED` so N replicas and N match channels take disjoint rows
-# rather than queueing behind each other.
+# Trials first, then oldest, and `FOR UPDATE SKIP LOCKED` so N replicas and N match lanes take
+# disjoint rows rather than queueing behind each other.
 #
-# `seat_count <= $4` is new and deliberate. A seat is a task and the task list is fixed, so a
-# 6-seat board must not be claimed by a replica that can only play four: refusing to claim is
-# visible in the queue, playing it short a seat would be a match nobody could explain.
+# `seat_count <= $4` is deliberate. A seat is a task and the task list is fixed, so a board wider
+# than MAX_SEATS must not be claimed: refusing to claim is visible in the queue, playing it short a
+# seat would be a match nobody could explain.
 K_CLAIM = """
 WITH pick AS MATERIALIZED (
     SELECT m.id FROM matches m
@@ -215,12 +213,12 @@ UPDATE matches m
   FROM pick WHERE m.id = pick.id
 """
 
-# --- 4.3 read the claimed row and its seats. One row, so no `row_number()`: the engine's wave
-# still has an `m`, and it is 0 for the whole run.
+# --- read the claimed row and its seats. One row, so no `row_number()`: the cartridge's API
+# still has an `m` per match, and it is 0 for the whole run.
 #
-# `model` is DERIVED here rather than stored: the version id is the model id (R9), so a row and a
+# `model` is DERIVED here rather than stored: the version id is the model id, so a row and a
 # node cannot disagree about what to call a model. `map` is THE BOARD, whole, from the season_maps
-# row the match was paired on (N28): the component carries no boards, so the row carries its own --
+# row the match was paired on: the component carries no boards, so the row carries its own --
 # exactly as the gate's claim does, and the two are changed together. `weights_hash` and `manifest_hash` are carried
 # for the replay envelope -- the record of what was paired, not what the version row says today.
 K_ROW = """
@@ -239,7 +237,7 @@ SELECT json_build_object(
  WHERE m.claim_token = ($1)::uuid AND m.status = 'claimed'
 """
 
-# --- 4.4 release: the models this replica has not caught up with yet. NOT a fault and NOT a lapse
+# --- release: the models this replica has not caught up with yet. NOT a fault and NOT a lapse
 # -- the row goes back to the queue with `refusals` spent, so a replica that is permanently behind
 # eventually fails the row rather than passing it round the fleet for ever. The roster clock is
 # what makes this rare; without the statement it would be a match played with one seat blind.
@@ -252,20 +250,20 @@ UPDATE matches
  WHERE claim_token = ($1)::uuid AND status = 'claimed' AND ($2)::boolean
 """
 
-# --- 4.4 start.
+# --- start.
 K_START = """
 UPDATE matches SET status = 'running'
  WHERE claim_token = ($1)::uuid AND status = 'claimed'
 """
 
-# --- 4.5 renew. No indexed column changes, so it stays heap-only -- the statement the table's
+# --- renew. No indexed column changes, so it stays heap-only -- the statement the table's
 # fillfactor exists for.
 K_RENEW = """
 UPDATE matches SET lease_expires_at = now() + ($2)::int * interval '1 second'
  WHERE claim_token = ($1)::uuid AND status = 'running'
 """
 
-# --- 4.6 finish. $1 token · $2 match · $3 the result, one element per seat · $4 the engine's end
+# --- finish. $1 token · $2 match · $3 the result, one element per seat · $4 the engine's end
 # reason · $5 turns · $6 opened at · $7 engine digest · $8 the Orion that ran the adapters · $9 key.
 #
 # One statement: the row and its seats move together or not at all. The seat count check is what
@@ -309,8 +307,8 @@ SELECT json_build_object(
                     'key', v.artifact_key,
                     -- WHAT IS REGISTERED IS NOT WHAT WAS UPLOADED, and the difference is two
                     -- things. `name` becomes the platform's model id, because Orion takes a
-                    -- model's id from the manifest and a competitor's name is not the platform's
-                    -- (R9). And the document is rebuilt FIELD BY FIELD rather than passed through,
+                    -- model's id from the manifest and a competitor's name is not the platform's.
+                    -- And the document is rebuilt FIELD BY FIELD rather than passed through,
                     -- so a `reference` naming somebody else's bucket key -- the one field that
                     -- could reach outside this version -- has nowhere to survive. The stored text
                     -- stays the competitor's exact bytes, because that is what the hash is over.
@@ -335,15 +333,14 @@ SELECT json_build_object(
 
 # ---- KALAM_MODE: where the eight statements live ------------------------------
 #
-# `db` runs them here over `kalam-db`, which is how a replica inside the deployment has always
-# worked. `api` calls /v1/runner/* instead and holds NO DATABASE CREDENTIAL, which is the whole
-# point: a replica can then run on hardware outside the deployment.
+# `db` runs them here over `kalam-db`; it is the rollback, and no image runs it. `api` calls
+# /v1/runner/* instead and holds NO DATABASE CREDENTIAL, which is the whole point: a replica can
+# then run on hardware outside the deployment.
 #
 # BOTH PATHS ARE IN ONE TASK LIST, gated on these two conditions, because the list is fixed and
-# there is no other way to carry a dual path -- and a dual path is what lets this land on `main`
-# without a cutover. Every `api` task is `soft`, so a call that fails leaves its slot unset and the
-# next task decides what that means; soma's docs/decisions.md §4b is why that distinction matters
-# over a WAN and did not over a compose bridge.
+# there is no other way to carry a dual path. Every `api` task is `soft`, so a call that fails
+# leaves its slot unset and the next task decides what that means: over a WAN, a call that never
+# arrived and a statement that matched nothing are different failures (RENEW_LOST below).
 #
 # The two paths MEET at `data.ct`, the execution contract. In `api` it is what the claim answered;
 # in `db` it is built from [vars]. Everything downstream reads `data.ct` and knows neither mode,
@@ -399,18 +396,15 @@ def seat_exists(i: int) -> dict:
 
 def seat_plays(i: int) -> dict:
     """A seat is asked for a move while the match is live, it exists, it has not forfeited, and it
-    has an ant to order. A forfeited seat is never inferred: it plays the no-op by construction,
-    which is the same rule the wave had and the reason a forfeit costs nothing after it is taken.
+    has an ant to order. A forfeited seat is never inferred: it plays the no-op by construction, so
+    a forfeit costs nothing after it is taken.
 
-    **A seat with no ants is not asked either**, and before seats ran past two that could not
-    happen: a two-seat match ends the turn a colony is empty. From three seats up an eliminated
-    colony stays in the match, `observe` still sends it a view with an empty `mine`, and its decoded
-    action is `[]` -- which is FALSY, so the strike test below read an answer as a miss. Five turns
-    later the seat was forfeited and ranked `engine_rank + seat_count`, under seats it had
-    outscored, and drawn as a disqualification. There is nothing for such a seat to order, so there
-    is nothing to miss; the engine plays the no-op for a seat it is given nothing for, and a colony
-    that spawns again from its hive is asked again the turn it has an ant. `cli/src/wave.rs`
-    applies the same rule, which is what keeps `tinybrains conform` agreeing."""
+    **A seat with no ants is not asked either.** From three seats up an eliminated colony stays in
+    the match and `observe` still sends it a view with an empty `mine`; its decoded action would be
+    `[]`, which is FALSY, so the strike test below would read an answer as a miss and eventually
+    forfeit a seat that had nothing to order. The engine plays the no-op for a seat it is given
+    nothing for, and a colony that spawns again from its hive is asked again the turn it has an ant.
+    `cli/src/wave.rs` applies the same rule, which is what keeps `tinybrains conform` agreeing."""
     return {"and": [LIVE, seat_exists(i), {"!": var(f"data.f{i}")},
                     {"!!": [var(f"temp_data.v{i}.mine")]}]}
 
@@ -426,7 +420,7 @@ def view_of(i: int) -> dict:
 
 
 def decode(i: int) -> dict:
-    """One seat's policy tensor to one action per ant, positionally aligned with `mine` (R3).
+    """One seat's policy tensor to one action per ant, positionally aligned with `mine`.
 
     The platform does this, not the manifest, and it is not a preference: a `result` expression's
     root is the output tensors alone, so it cannot see the observation and cannot gather at the
@@ -490,9 +484,8 @@ MATCH_TASKS = [
     ]}), cond=TURN0),
 
     # THE REAP IS `db` ONLY. In `api` the gate runs it as its own cron channel, once, at the
-    # centre -- as every caller's first task it was 0.8N reaps a second at N runners, each scanning
-    # an index whose size is itself proportional to N, for a statement that normally matches
-    # nothing.
+    # centre, rather than as every runner's first task: at N runners that would be N reaps per poll
+    # for a statement that normally matches nothing.
     task("reap", "Return lapsed leases to the queue", db(
         "db_write", K_REAP, [], "temp_data.reaped",
     ), cond=T0_DB),
@@ -542,8 +535,8 @@ MATCH_TASKS = [
         # read-back joins `seasons` and `games` to resolve the season's execution rules, and the
         # `kalam` role is granted neither -- deliberately, because "Kalam reads no competitive
         # decision" is a fact of the grant. So a db-mode replica plays by its own configured
-        # numbers, which is exactly what it did before, and check/configs.sh 1c is what keeps
-        # those equal to the gate's fallbacks for as long as both paths exist.
+        # numbers, and web's scripts/check/configs.sh keeps those equal to the gate's fallbacks
+        # for as long as both paths exist.
         ("data.ct", {"if": [MODE_API, var("temp_data.cl.contract"), {
             "turn_ms": vars_("turn_ms"),
             "max_turns": vars_("max_turns"),
@@ -589,8 +582,7 @@ MATCH_TASKS = [
 ] + [
     # ------------------------------------------------------------------ turn 0: the barrier
     #
-    # The residency barrier is gone with the sidecar, but one thing it did still has to happen:
-    # a seat whose model this node cannot serve must not play. The roster clock registers and
+    # A seat whose model this node cannot serve must not play. The roster clock registers and
     # activates from the shared schema and is normally ahead of the pairing, so this is the lag
     # case -- a GET per seat against this node's own admin API, on localhost, once per match,
     # against a thousand turns.
@@ -641,7 +633,7 @@ MATCH_TASKS = [
 
     task("world", "Build the world", plugin(f"{ENGINE}.worldgen", {
         "seeds": [var("data.row.seed")],
-        # The board, whole, off the claimed row: the component carries none (N28).
+        # The board, whole, off the claimed row: the component carries none.
         "map": var("data.row.map"),
         # The board carries the seat count and the engine refuses a caller that disagrees, so
         # passing it is a free check rather than a parameter.
@@ -672,7 +664,7 @@ MATCH_TASKS = [
                                    {"val": ["temp_data", "obs", "views", 0, "view", "size", 1]}]}),
     ), cond={"!": OVER}),
 ] + [
-    # ONE INFERENCE PER SEAT, and the whole reason the wave could go. `model` is computed, so this
+    # ONE INFERENCE PER SEAT. `model` is computed, so this
     # task is invisible to `models.preload` -- the roster clock tags every registration `ladder`
     # and the replica's `models.preload_tags` warms them at boot instead.
     #
@@ -905,9 +897,8 @@ MATCH_TASKS += [
             "max_turns": var("data.ct.max_turns"),
             "strike_ceiling": var("data.row.strike_ceiling"),
             "engine_digest": vars_("engine_digest"),
-            # What ran the adapters. `evaluator_digest` named an axon build; this names the Orion
-            # whose expression engine and tract this match was played on, which is what a
-            # re-validation sweep is per (R10).
+            # What ran the adapters: the Orion whose expression engine and tract this match was
+            # played on, which is what a re-validation sweep is per.
             "orion_version": vars_("orion_version"),
             "engine_ranks": var("temp_data.res.ranks"),   # before forfeits are applied
             "scores": var("temp_data.res.scores"),
@@ -1051,16 +1042,15 @@ MATCH = {
         "`model_infer` per live seat, step, until the engine stops returning views. The row is "
         "finished in place, with its replay under a key naming the attempt. Every statement is "
         "conditioned on the claim token, so a stale attempt updates nothing. It reads no rating "
-        "and writes no rating, and its database role cannot reach one. The wave it replaces "
-        "existed to amortise one batched inference call across many seats -- a number that is two "
-        "on every Ants map (decision R7). On SIGTERM Orion stops claiming and lets the match in "
-        "hand finish inside cron.shutdown_timeout_secs. docs/design.md; the statements are "
-        "soma/docs/schema.md §4."
+        "and writes no rating, and its database role cannot reach one. In `api` mode every "
+        "statement is a call to Soma's runner gate (/v1/runner/*). On SIGTERM Orion stops "
+        "claiming and lets the match in hand finish inside cron.shutdown_timeout_secs."
     ),
     "tags": ["pkg:kalam"],
     "condition": True,
     # One sweep per turn, plus the sweep that finishes. `max_turns` is the game's bound and this is
-    # the runaway bound above it.
+    # the runaway bound above it -- so it is also a ceiling on max_turns: a match needs
+    # max_turns + 1 sweeps to finish.
     "loop": {"counter": "i", "max": 1010},
     "tasks": MATCH_TASKS,
 }
@@ -1071,9 +1061,9 @@ ROSTER = {
     "description": (
         "Every version the ladder says is verified or active, registered, admitted and activated "
         "ON THIS NODE. Models are a state-database entity and each replica is its own Orion with "
-        "its own state database (decision 41), so a roster is per node -- and a clock that "
+        "its own state database, so a roster is per node -- and a clock that "
         "reconciles from the shared schema needs no replica list anywhere, which is what keeps "
-        "any clock from ever calling a replica (decision R8). One step per item per tick: registration "
+        "any clock from ever calling a replica. One step per item per tick: registration "
         "queues admission, and a later tick activates what passed. Nothing here writes to the "
         "platform schema; its database role has SELECT and nothing else on model_versions."
     ),

@@ -1,418 +1,328 @@
 # kalam
 
-Kalam plays TinyBrains matches one at a time: it claims a queued row, advances its turns, and
-records the result and the replay. It ships an Orion 1.8.1 package with five cron channels, two
-generated workflows, five connectors, and the Ants plugin, and it ships them as a **runner**: an image
-of orion-server with the package inside, which plays matches for a Soma from any machine.
+Kalam is the TinyBrains match runner. It is an Orion 1.8.1 package (cron channels, generated
+workflows, connectors) shipped inside a runnable image, `ghcr.io/tiny-brains/kalam`: orion-server,
+the package, and the Ants engine from one ants release. A runner claims queued matches through
+[Soma](https://github.com/Tiny-Brains/soma)'s runner gate, plays them turn by turn on Orion's own
+model runtime, and posts the result and the replay back. It holds no database credential and binds
+no public port. Soma owns the schema, pairing and ratings, [ants](https://github.com/Tiny-Brains/ants)
+owns the rules, and Orion runs the models.
 
-## The name
+*Kalam* (களம்) is Tamil for the field of contest.
 
-**Kalam** (களம்) means the arena or field of contest in Tamil. It is where scheduled competitors
-meet; eligibility, matchmaking, and rankings are decided elsewhere.
+## Quick start
 
-## Scope
+```sh
+cp .env.example .env            # fill it in: see Configuration, or Run a runner
+docker compose up -d            # ghcr.io/tiny-brains/kalam:latest; add --build to run this checkout
+docker compose logs -f runner
+```
 
-**It owns**
-
-- Atomic claims, lease renewal, and recovery of expired claims.
-- Keeping this node's model set in step with the ladder, and the observe / infer / step loop.
-- Per-seat strike accounting and attempt failure handling.
-- Result persistence and replay uploads identified by match attempt.
-
-**It does not**
-
-- Select opponents, rate results, or promote versions; [Soma](https://github.com/Tiny-Brains/soma)'s clocks own those decisions.
-- Read the roster or expose public routes; [Soma](https://github.com/Tiny-Brains/soma) owns the API and schema.
-- Interpret game state; [Ants](https://github.com/Tiny-Brains/ants) implements the cartridge.
-- Implement inference; Orion's own `models` entity fetches each artifact by digest and runs it
-  under `tract`, and a competitor's adapter is JSONLogic the same engine evaluates.
-- Checkpoint turns; recovered matches restart from their seeds.
-
-## Where it sits
+A healthy boot logs the architecture and engine it derived, then the self-load, and ends with:
 
 ```text
-[Postgres matches + seats] <-- SQL --> [Kalam replica] --> [Ants plugin]
-[Postgres model_versions]  --  SQL -->       |     |
-                                      admin API   replay PUT
-                                             v     v
-                                  [this node's]  [object store]
-                                  [models entity] --> [models bucket]
+==> arch arm64
+==> engine sha256:…
+==> loading the kalam package into this node
+==> loaded: tb.ants is live and <n> channels are active, this node can claim
 ```
 
-| Direction | Party | Over | What moves |
-|---|---|---|---|
-| reads | Postgres | kalam-db SQL | Queued matches, leases, engine identity, and seat hashes |
-| writes | Postgres | Restricted SQL role | Claim, execution, result, and replay columns |
-| reads | Postgres | Six columns of model_versions | What the ladder says this node should be able to play |
-| calls | This node's admin API | kalam-orion HTTP | Register, admit and activate a model here; ask whether a seat's model is servable |
-| calls | The models bucket | kalam-models storage | The node fetches each artifact by connector and digest, and re-hashes it |
-| calls | Ants | In-process plugin ABI | Opaque state, seat observations, actions, and scores |
-| calls | Replay store | Presign followed by HTTP PUT | One replay object per finished attempt |
+If it ends with `self-load: …` instead, the container stops on purpose: see
+[Troubleshooting](#troubleshooting).
 
-The [system map](https://github.com/Tiny-Brains/soma/blob/main/docs/architecture.md) shows where runners sit.
-The match database is the coordination boundary with Soma's clocks; the packages do not call each other.
+**Against web's local stack** (bring it up first, as [web](https://github.com/Tiny-Brains/web)'s
+README says):
 
-## Interface
+1. In `.env`, uncomment the `host.docker.internal` block at the bottom. It points Soma, the models
+   bucket and the replay endpoint at this machine, sets `RUNNER_SIG_DIR=../web/keys/signatures`, and
+   sets `RUNNER_ALLOW_PRIVATE_URLS=1`.
+2. Copy `TB_TRUST_PUBLIC_KEY`, `MODELS_READ_ACCESS_KEY` and `MODELS_READ_SECRET_KEY` from web's `.env`.
+3. `RUNNER_KEY`: mint one with web's `scripts/dev/runner-key.sh`.
+4. `ORION_ADMIN_KEY`: `openssl rand -hex 32`.
+5. `docker compose up -d --build`.
 
-Kalam exposes no public API. `channels/tb-match-{1..4}.json` and `channels/tb-roster.json` define
-its triggers; `workflows/tb-match-run.json` and `workflows/tb-roster-run.json` are the installed
-execution graphs.
+**To run an unreleased engine**, build against an ants checkout's `dist/` with a machine-local
+`docker-compose.override.yml` (gitignored), and set `KALAM_IMAGE=tinybrains/kalam:dev` in `.env`:
 
-| Channel | Singleton key | Configurable controls | One occurrence writes |
-|---|---|---|---|
-| tb-match-1..4 | match-N, within this replica | transport_config.schedule, config.timeout_ms; forbid concurrency and skip misfires | One claim, its renewed leases, its terminal result, its replay key and its seat scores |
-| tb-roster | roster, within this replica | schedule, timeout_ms | Nothing in the platform schema — it writes only to this node's own model registry |
-
-A match run claims ONE row, checks this node can serve both seats' models, generates the world, and
-repeats observe → one `model_infer` per live seat → step until the engine stops returning views.
-Four channels means four matches at once per replica; the claim's `FOR UPDATE SKIP LOCKED` is what
-keeps them off each other's rows.
-
-A roster run takes one step per version per tick — register, then activate what has passed — so a
-node that restarts mid-admission simply catches up.
-
-| Plugin id | Export | Role in the package | Purity |
-|---|---|---|---|
-| tb.ants | tb.ants.worldgen | Initialize a seeded world | Pure, seeded |
-| tb.ants | tb.ants.observe | Build live-seat views | Pure |
-| tb.ants | tb.ants.step | Advance the match | Pure |
-| tb.ants | tb.ants.finish | Extract results | Pure |
-| tb.ants | tb.ants.replay-decode | Available in the plugin; not used by the match clock | Pure replay reconstruction |
-
-[plugins/tb-ants/plugin.json](plugins/tb-ants/plugin.json) declares the ABI inputs.
-[Soma's migrations](https://github.com/Tiny-Brains/soma/tree/main/migrations) declare allowed columns
-and the restricted kalam role. Check the SQL/role seam against a development database:
-
-```sh
-./scripts/check-sql.sh
+```yaml
+services:
+  runner:
+    build:
+      additional_contexts:
+        ants: ../ants/dist
 ```
 
-## Run it, test it
+## Configuration
 
-A runner needs a Soma to play for — [web's](https://github.com/Tiny-Brains/web) local stack, or a
-deployment — and nothing else: no database, no bucket secret, no loader.
+Set in `.env`. [`docker-compose.yml`](docker-compose.yml) refuses to start without the required ones.
 
-```sh
-cp .env.example .env          # the Soma URL, a runner key, the trust key, the models read key
-docker compose up -d          # ghcr.io/tiny-brains/kalam:latest; --build for this checkout
-docker compose logs -f runner # "loaded: tb.ants is live and 5 channels are active, this node can claim"
-```
-
-Against web's local stack, uncomment the `host.docker.internal` block in `.env`, mint a key with
-web's `scripts/dev/runner-key.sh`, and point `RUNNER_SIG_DIR` at web's `keys/signatures`. A tag
-`v<major>.<minor>.<patch>` on main publishes the image for amd64 and arm64; `gh workflow run
-release.yml` rehearses it.
-
-To work on the package itself, run commands from this repository's root:
-
-- Orion server 1.8.1 with plugins enabled and the variables below supplied.
-- curl plus jq or Python 3 for loading; Python 3 and Docker for SQL checks.
-- No Rust toolchain is needed to load the committed engine component.
-
-Point ORION_ADMIN at the replica, enable private connections for its loopback sidecar, and load:
-
-```sh
-KALAM_ALLOW_PRIVATE_URLS=1 R2_ENDPOINT=... ./scripts/load-package.sh
-```
-
-Validate the definitions independently of the running wave:
-
-```sh
-orion-server lint . --deny-warnings
-```
-
-The SQL check prepares the nine shipped statements and checks execution-column grants, including
-denial of rated_at updates. It recreates and drops `kalam_sqlcheck`; use a development DB_CONTAINER
-and DB_USER. Set MIGRATIONS to the path of Soma's migrations when the two repositories are not
-adjacent. There is no standalone wave test suite: SQL preparation does not exercise leases or turn
-execution. Package lint does not check Ants inputs from the vendored JSON manifest; use --plugin-dir
-with a checkout containing Ants' plugin.toml for that check, or validate against the active plugin
-at load.
-
-Edit scripts/gen-kalam.py and regenerate with `python3 scripts/gen-kalam.py`; commit the workflow
-and channel output. To update the engine, rebuild the image: the component, `cartridge.json` and the reference
-observations come from the cartridge's latest GitHub release (or the tag `ANTS_RELEASE` names), so
-this repository keeps no copy of them. `--build-context ants=../ants/dist` builds against an ants
-checkout's own build instead.
-That script copies committed artifacts and prints their digest; it does not compile Ants.
-
-Use the pinned Orion 1.8.1 toolchain for these checks. Older binaries do not understand this
-package's cron, plugin, or authentication definitions and can report misleading schema errors.
-
-## What a deployment owes it
-
-| Setting | Purpose | Missing or inconsistent value |
+| Variable | Default | What it is |
 |---|---|---|
-| KALAM_DB_URL | Secret-bearing database URL using the kalam role | The match clock cannot reach its execution rows |
-| R2_ENDPOINT, R2_BUCKET | Replay store location | Uploads fail and successful results cannot finish |
-| R2_ACCESS_KEY, R2_SECRET_KEY | Secret replay-store credentials | Replay signing or upload fails |
-| ORION_ADMIN, ORION_ADMIN_API_KEY | Loader destination and optional secret admin token | Defaults target the local admin API; protected APIs reject missing credentials |
-| KALAM_ALLOW_PRIVATE_URLS | Set to 1 for private database, bucket and admin addresses | Orion blocks private connections, including the models bucket at the `head` stage |
-| MODELS_BUCKET, MODELS_ENDPOINT | The models bucket, at the address a NODE dials | The roster registers nothing; every match is released as unready |
-| ORION_ADMIN_BEARER | The whole `Bearer <key>` header value | Every admin call is 401 — a connector resolves `env://` only when the reference is the entire string |
-| KALAM_ORION_ADMIN | Loader-time override for this node's own admin API | Defaults to 127.0.0.1:8080, which is right on a node |
-| lease_seconds, renew_every_n_turns | Claim timing | Poor sizing causes lease loss mid-match |
-| turn_ms, max_turns | Cartridge execution limits, and the per-seat `model_infer` deadline | Must match the registered game contract |
-| model_prefix, orion_version | The model id a version gets, and what ran the adapters | Must equal Soma's; `configs.sh` asserts both |
-| refusal_ceiling | How often a row may be refused for an unserved model before it fails | Counted apart from lapses. The STRIKE ceiling is not here: it is read off `matches.strike_ceiling` |
-| engine_digest | Identity used to filter claims | A mismatch can leave a healthy replica idle |
-| replay_prefix, blob_endpoint | Attempt-object naming and signed URL handling | Incorrect paths or endpoint subtraction break uploads |
+| `RUNNER_KEY` | required | This machine's credential, minted on the admin Runners screen (`/admin/runners`). Shown once |
+| `SOMA_URL` | required | The Soma this runner plays for. Every match statement is a call to its `/v1/runner/*` |
+| `MODELS_ENDPOINT` | required | The models bucket, as reached from this machine |
+| `MODELS_READ_ACCESS_KEY`, `MODELS_READ_SECRET_KEY` | required | The deployment's read-only key for `models/*`. Every byte fetched is re-hashed against the roster's digest |
+| `RUNNER_BLOB_ENDPOINT` | required | The replay bucket's base URL as reached from here. **Must equal Soma's `RUNNER_BLOB_ENDPOINT`** |
+| `TB_TRUST_PUBLIC_KEY` | required | The deployment's plugin trust key |
+| `ORION_ADMIN_KEY` | required | This node's own admin key (`openssl rand -hex 32`). Never the deployment's |
+| `RUNNER_LABEL` | `runner` | How this machine appears on the Runners screen. Two machines on one key are told apart by it |
+| `RUNNER_SIG_DIR` | `./keys/signatures` | The deployment's plugin signatures, mounted read-only |
+| `KALAM_IMAGE` | `ghcr.io/tiny-brains/kalam:latest` | The image, and so the engine. **Pin a version under a live season** |
+| `MODELS_BUCKET` | `tinybrains-models` | The models bucket's name |
+| `RUNNER_CRON_WORKERS` | `2` | Matches at once, across all lanes (Orion `cron.workers`) |
+| `RUNNER_MAX_CACHE_BYTES` | 4 GiB | The on-disk model cache (the `runner-models` volume) |
+| `RUNNER_MAX_LOADED_BYTES` | 2 GiB | Model sessions held in memory at once |
+| `RUNNER_ALLOW_PRIVATE_URLS` | unset | `1` only against a local stack: lets the connectors reach private addresses |
+| `RUNNER_ADMIN_PORT` | `8090` | Loopback port for this node's `/health` and `/metrics` |
+| `RUNNER_ARCH` | from `uname -m` | Reported on the Runners screen. Leave it unset |
+| `RUNNER_NODE_VERSION` | `dev` | Reported on the Runners screen |
+| `ORION_VERSION` | `1.8.1` | Recorded on every match. Must equal the Soma node's `orion_version` |
+| `RUNNER_SHUTDOWN_DRAIN_SECS` | `5` | Orion `server.shutdown_drain_secs` |
+| `RUNNER_SHUTDOWN_FORCE_SECS` | `2700` | Orion `server.shutdown_force_timeout_secs`: the real bound on a draining match |
+| `RUNNER_CRON_SHUTDOWN_SECS` | `2700` | Orion `cron.shutdown_timeout_secs` |
+| `RUNNER_STOP_GRACE` | `2760s` | Docker's stop grace. Must exceed drain + force |
+| `RUNNER_CPUS`, `RUNNER_MEMORY` | `0` (no limit) | Container limits |
 
-The `[vars]` rows are checked once, loudly, at the match clock's `vars` task, which halts if any is
-missing. The
-[runner template](docker/runner.toml.tmpl)
-contains deployment values; capacity and timing are tuning choices, not game-independent constants.
-Derive engine_digest from the vendored bytes and align it with games.active_engine_digest and
-season identity. blob_endpoint must match the replay endpoint used to construct signed paths.
+Compose also sets values you should not override: `KALAM_DB_URL`, `R2_BUCKET`, `R2_ACCESS_KEY` and
+`R2_SECRET_KEY` are set to the empty string, so the `db`-mode connectors resolve and are never used;
+`ORION_ADMIN_BEARER` is `Bearer ${ORION_ADMIN_KEY}`; `R2_ENDPOINT` comes from `RUNNER_BLOB_ENDPOINT`.
 
-Give each replica independent Orion state with cluster mode disabled, so its concurrency keys stay
-local. Reload the package after replacing that state. A readiness probe must establish that the
-engine and the tb-match channels are loaded; Orion's readyz alone does not prove playing capacity.
-A replica also needs `[models] enabled = true` and a cache directory, because its roster clock is
-what makes a version playable here.
-The outer drain limit is server.shutdown_force_timeout_secs; configure the cron timeout and
-container stop grace to allow the intended drain before leases become the recovery mechanism.
+The node's Orion config is [`docker/runner.toml.tmpl`](docker/runner.toml.tmpl): api mode, the
+engine digest (derived by the entrypoint from the component), the model cache, `engine.ops_budget`
+and `models.max_timeout_ms`. The terms a match is played under (`turn_ms`, `max_turns`, the lease
+and renew interval, the refusal and strike ceilings, the replay and model prefixes) arrive on each
+claim from the match's season, and are not configured here.
+
+Build args: `ANTS_RELEASE` (empty means the latest ants release) and `ORION_VERSION` (`1.8.1`).
+
+## Run a runner
+
+A runner is this image on any machine you control: a desk, a Mac mini, a cloud VM. It plays the
+same queue by the same claim as every other runner, through Soma's gate. What it holds is a key, a
+label and the engine it plays: no connection string, no bucket write credential, and no admin
+token for anything but its own loopback API.
+
+### What to copy from the deployment
+
+| What | From | Why |
+|---|---|---|
+| `RUNNER_KEY` | the admin **Runners** screen, `/admin/runners` | Shown once: Soma keeps only its hash and a display prefix. Minting another is free |
+| `TB_TRUST_PUBLIC_KEY` and `keys/signatures/` | the deployment (web's `keys/signatures/`) | A plugin signature belongs to whoever holds the trust key, so neither the image nor this repository carries one |
+| `MODELS_READ_ACCESS_KEY`, `MODELS_READ_SECRET_KEY` | the deployment | A key that can only GET `models/*` |
+| `SOMA_URL`, `MODELS_ENDPOINT`, `RUNNER_BLOB_ENDPOINT` | the deployment | As reached from this machine |
+| `ORION_ADMIN_KEY` | generate it here | `openssl rand -hex 32`. It authorises only this node's own package load and roster clock |
+
+```sh
+cp .env.example .env                                    # fill in the table above
+mkdir -p keys/signatures
+scp <deployment>:web/keys/signatures/* ./keys/signatures/
+docker compose up -d
+docker compose logs -f runner                           # wait for "==> loaded: …"
+```
+
+### The machine
+
+- **Pin the image.** Set `KALAM_IMAGE=ghcr.io/tiny-brains/kalam:<version>`. The image carries the
+  engine, and a runner whose engine digest is not `games.active_engine_digest` claims nothing, for
+  ever, with no error anywhere. `latest` moves with every release.
+- **The architecture doesn't matter.** The cartridge is wasm32, so an arm64 Mac derives the same
+  digest as an amd64 deployment. Images are published for linux/amd64 and linux/arm64.
+- **Disable sleep.** Use Energy Saver, or run the stack under `caffeinate -dimsu`. A sleeping host
+  stops renewing its leases. The matches lapse and are replayed by another runner, so no work is
+  lost, but the machine keeps claiming matches it won't finish.
+- **Size the Docker VM** above `RUNNER_MAX_CACHE_BYTES + RUNNER_MAX_LOADED_BYTES` plus the runtime:
+  about 8 GiB at the defaults, more if you raise `RUNNER_CRON_WORKERS`. Below that the model cache
+  thrashes. Every eviction re-fetches an artifact over the WAN, and it shows only as slowness.
+- **Capacity is `RUNNER_CRON_WORKERS`.** It is shared by every channel, and the package's four
+  match lanes cap matches at once at four whatever it says. Start at 2 and watch lease renewals
+  before raising it: each match in flight keeps its seats' model sessions in memory. The engine is
+  wasm and the models are ONNX on CPU, so cores matter more than clock speed.
+- **Bandwidth is small and bursty.** One replay PUT per match (about 58 KiB for a 549-turn match),
+  one artifact GET per cache miss (at most 64 MiB, `max_artifact_bytes`), and the idle poll: a token
+  exchange and a claim per lane every 5 s.
+- **No inbound ports.** 8080 is published on loopback only (`RUNNER_ADMIN_PORT`), for `/health` and
+  `/metrics`. Publishing it would expose this node's admin API.
+
+### The replay endpoint
+
+One bucket has three addresses, and two of them must be the same string, because SigV4 signs the host:
+
+| Setting | Set on | What it is |
+|---|---|---|
+| `R2_ENDPOINT` | Soma | Where Soma itself reaches the bucket |
+| `RUNNER_BLOB_ENDPOINT` | Soma | The host the gate signs a runner's replay PUT for |
+| `RUNNER_BLOB_ENDPOINT` | the runner's `.env` | The base the runner PUTs to. **Must equal the row above** |
+
+If these two differ, every replay PUT fails with `SignatureDoesNotMatch`, a 403 that names neither
+setting.
+
+### Reading the Runners screen
+
+| State | Meaning | What to do |
+|---|---|---|
+| **live** | Authorised and calling in | Nothing |
+| **quiet** | Authorised, and silent for longer than a lease | The machine is off, can't reach the gate, or is being rate-limited on the token route (see below). Its in-flight matches are already lapsing |
+| **wedged** | Quiet and still holding matches | Revoke the runner so it takes no more. Its rows are reaped on their own |
+| **key or owner** | The runner row is fine, but its key is revoked or the key's owner is no longer an admin | Re-grant the owner, or mint a new key |
+| **revoked** | Stopped on purpose | Nothing. It stays listed because `matches.played_by` points at it |
+
+The screen also warns when live runners disagree about the engine digest or the Orion version.
+Both disagreements are silent everywhere else.
+
+**Revoking a key** stops every machine that uses it. **Revoking a runner** stops only that machine.
+Both take effect within one token lifetime (ten minutes), because every `/v1/runner/*` call carries
+a short-lived token rather than the key.
+
+### Several runners behind one address
+
+Each cron run exchanges the key for a fresh token: measured at about 0.89 exchanges/s per idle runner.
+`POST /v1/runner/token` is rate-limited per source address, and a NAT is one address:
+
+```text
+runners behind one address  ≈  Soma's runner_token_rate / 0.89   (about 33 at 30 rps)
+```
+
+Past that, the gate answers 429, the run ends without an error trace, and the machine shows **quiet**
+while it is plainly switched on.
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Boots healthy, never claims a match | The engine digest (the `==> engine` boot line) is not the one Soma declared, because the image was built from another ants release | Pin `KALAM_IMAGE` to an image built from the deployment's ants release. Its `dev.tinybrains.ants.engine` label names the digest |
+| `self-load: tb.ants=… active-channels=…` and the container stops | A workflow could not activate, so `package apply` left every channel after it as a draft (a draft cron channel never fires) | Read the error above it. Usually a connector names an `env://` variable that is **absent**: it must be set, even to the empty string. A missing or wrong signature (`RUNNER_SIG_DIR`, `TB_TRUST_PUBLIC_KEY`) quarantines the engine the same way |
+| `self-load: the package did not load` | `load-package.sh` failed | Read its output above: signatures, the trust key, or a private address refused |
+| Replay PUT 403 `SignatureDoesNotMatch` | `RUNNER_BLOB_ENDPOINT` differs from Soma's | Make them the same string |
+| Shown as **quiet** or **key or owner**, or never appears | The token exchange is refused: 401 (the key is revoked or unknown, or its owner is no longer an admin) or 429 (too many runners behind one address) | Mint a new key or re-grant the owner. For 429, raise Soma's `runner_token_rate` or spread the machines across addresses |
+| Matches are claimed and handed back; rows eventually fail `MODEL_UNAVAILABLE` | This node can't serve a seat's model, because its roster clock hasn't registered and activated it | Check `MODELS_ENDPOINT`, `MODELS_BUCKET` and the read key. Against a local stack, also check `RUNNER_ALLOW_PRIVATE_URLS=1` |
+| Calls to this node's admin API get 401 | `ORION_ADMIN_BEARER` must be the whole `Bearer <key>` header | Leave it as compose sets it |
+| Rows stay `running` after a restart | The drain was cut short: Docker's grace period ran out before Orion's | Keep `RUNNER_STOP_GRACE` above drain + force. The rows are reaped when their lease lapses |
+
+## Developing the package
+
+[`scripts/gen-kalam.py`](scripts/gen-kalam.py) is the source of `workflows/` and `channels/`, which
+are gitignored build output: the SQL and JSONLogic are readable there and inlined into JSON. The
+Dockerfile regenerates them into the image. `connectors/` and `shared/kalam.json` are authored JSON.
+[CLAUDE.md](CLAUDE.md) has the rules and the Orion gotchas.
+
+| Command | What it does | Needs |
+|---|---|---|
+| `python3 scripts/gen-kalam.py` | Writes `workflows/` and `channels/` | Python 3 |
+| `python3 scripts/gen-kalam.py --check` | Fails if the files on disk drifted from the generator | Python 3 |
+| `./scripts/check-defs.sh` | `--check`, then `orion-server lint` and `clippy` (both `--deny-warnings`), then `fmt --check` on `connectors/` and `shared/` | `orion-server` 1.8.x on `PATH` |
+| `./scripts/check-sql.sh` | PREPAREs the generated SQL against a scratch database built from Soma's migrations, and asserts the `kalam` role's grants | Docker; web's running `tinybrains-db-1`; `../soma/migrations` (override with `MIGRATIONS`, `DB_CONTAINER`, `DB_USER`) |
+| `docker compose up -d --build` | Builds this checkout and runs it as a runner | Docker and a Soma |
+| `ORION_ADMIN=… ORION_ADMIN_API_KEY=… ./scripts/load-package.sh` | Compiles and applies the package into a running 1.8.1 node, and retires objects it no longer ships. The entrypoint runs it at boot | `orion-server`, curl, Python 3 |
+
+- If the host's `orion-server` is older than 1.8, lint with the image's copy:
+  `docker run --rm --entrypoint orion-server ghcr.io/tiny-brains/kalam clippy /pkg/kalam --deny-warnings`.
+- Lint checks the engine calls too when the engine is present in the gitignored `plugins/tb-ants/`:
+  copy `tb-ants.wasm`, `plugin.toml`, `plugin.json` and `cartridge.json` there from an ants release
+  archive or from `../ants/dist/`.
+- There are no unit tests. Lint and `check-sql.sh` are the compiler, and neither exercises leases or
+  turns. A real match needs a Soma: web's stack plus this runner. `tinybrains conform` re-runs a
+  replay locally and diffs every field and every turn.
+- After any change, rebuild (`docker compose up -d --build`). A runner started from an older image
+  is still running the old package.
+
+## Releasing
+
+```sh
+gh workflow run release.yml                   # rehearsal: builds both platforms, pushes nothing
+git tag vX.Y.Z && git push origin vX.Y.Z      # from main: publishes the image
+```
+
+- A `v*` tag on main publishes `ghcr.io/tiny-brains/kalam:X.Y.Z`, `:X.Y` and `:latest` for
+  linux/amd64 and linux/arm64 ([`.github/workflows/release.yml`](.github/workflows/release.yml)).
+  The workflow checks that both platforms carry the same package and engine.
+- The ants release is chosen once per build: the latest, or the repository variable `ANTS_RELEASE`.
+  The image is labelled `dev.tinybrains.ants.release` and `dev.tinybrains.ants.engine`. **An image
+  on a new engine is an engine cutover.** It claims nothing until Soma declares that engine, so pin
+  `ANTS_RELEASE` under a live season.
+- Never re-cut a tag. Runners pin versions.
+- When the engine changes, re-sign with web's `scripts/setup/sign-plugins.sh` and give every runner
+  the new signatures. Otherwise its self-load stops on a quarantined engine.
 
 ## Layout
 
 ```text
-channels/tb-match-{1..4}.json  four cron schedules, one singleton key each
-channels/tb-roster.json      the reconciler's schedule
-workflows/tb-match-run.json  generated one-match execution graph
-workflows/tb-roster-run.json generated model reconciler
-connectors/kalam-db.json     restricted platform database connection
-connectors/kalam-orion.json  this node's own admin API, where its model set lives
-connectors/kalam-models.json the models bucket the node fetches artifacts from
-connectors/kalam-blobs.json  replay URL signing
-connectors/kalam-blobs-put.json replay upload connection
-plugins/tb-ants/             vendored component and manifests
-scripts/gen-kalam.py         readable SQL and workflow generator
-scripts/check-sql.sh         SQL preparation and grant assertions
-scripts/load-package.sh      replacement of objects tagged pkg:kalam
-Dockerfile                   the runner image: orion-server, the package and the engine
-docker/entrypoint.sh         derive the arch and engine, migrate, load the package, run
-docker/runner.toml.tmpl      the runner's instance config (api mode)
-docker/replica-db.toml.tmpl  the retired db-mode config, kept for web's configs check until N10
-docker-compose.yml           one runner, given a Soma URL
-docs/design.md               the match run's design
-docs/decisions.md            Kalam's share of the decision record
-docs/deployment.md           a replica's rules, drain, numbers and roster; a runner on a desk
-docs/orion-notes.md          what building the package found in Orion
+connectors/                    authored connector definitions
+  kalam-api.json               Soma's runner gate; URL from KALAM_API_URL at load
+  kalam-orion.json             this node's own admin API, where its model set lives
+  kalam-models.json            the models bucket, read-only
+  kalam-blobs-put.json         the replay PUT to a presigned URL; base URL from R2_ENDPOINT
+  kalam-db.json                db mode only: Postgres as the kalam role
+  kalam-blobs.json             db mode only: signs replay PUTs itself
+shared/kalam.json              shared constants: clock tracing, the match lanes' config, the token call
+scripts/
+  gen-kalam.py                 source of workflows/ and channels/: the SQL, the task lists, the lanes
+  check-defs.sh                no-stack gate: drift, lint, clippy, fmt
+  check-sql.sh                 PREPARE the generated SQL; assert the kalam role's grants
+  load-package.sh              compile and apply the package into a node
+  stage-set.py                 stage connectors with a deployment's URLs and private-address flags
+docker/
+  entrypoint.sh                derive arch and engine digest, migrate, self-load, exec orion-server
+  runner.toml.tmpl             the runner's Orion config
+  replica-db.toml.tmpl         db-mode config: run by nothing, kept for the rollback and web's check
+Dockerfile                     the runner image: orion-server, the package, the engine from an ants release
+docker-compose.yml             one runner service
+.env.example                   a runner's settings
+.github/workflows/release.yml  v* tag → ghcr.io/tiny-brains/kalam
+workflows/, channels/          generated (gitignored)
+plugins/tb-ants/               optional local engine for lint (gitignored)
 ```
 
-## What must stay true
+## Invariants
 
-- **Kalam cannot write the ladder.** Soma's migrations restrict its role to match execution columns, and the SQL check rejects rated_at access.
-- **Only the current claim may finish a row.** Finish SQL checks the claim token, while replay keys distinguish attempts.
-- **Leases make lost matches recoverable.** Claim SQL reaps expired work and bounds repeated failures rather than relying on process memory.
-- **A seat this node cannot serve is released, never played.** The barrier asks the local admin API per seat; a model the roster has not caught up with costs a refusal, not a blind seat.
-- **Engine identity controls claims.** A replica must only play rows matching its loaded component digest.
-- **Game state remains opaque to workflows.** This boundary is a review requirement; cartridge functions own its interpretation.
-- **The generated files are the package.** A change to scripts/gen-kalam.py that is not regenerated and committed ships a stale workflow, and nothing at runtime notices.
+- **Kalam writes execution columns only.** Soma's migrations grant the `kalam` role claim, lease,
+  result and replay columns. `check-sql.sh` fails if the role can write `matches.rated_at`, read
+  `ratings`, or read a verdict column of `model_versions`. A wider grant would let a runner move
+  the ladder.
+- **Every write is fenced on the claim token.** Start, renew, release and finish all carry
+  `claim_token`, so a runner whose lease was reaped writes nothing. The replay key names the attempt
+  (`<replay_prefix>/<match>/<claim_token>.json`), so a stale attempt's blob is an orphan, not a
+  replacement.
+- **The engine digest decides what is claimed.** It is derived from the component in the image and
+  must equal `games.active_engine_digest`. A mismatch claims nothing, silently.
+- **One Orion state per runner, never cluster mode.** Each lane's `forbid` key is local. Shared state
+  would make each lane a fleet-wide singleton: one runner plays and the rest idle, all looking
+  healthy.
+- **A seat this node can't serve is released, never played.** Before a match starts, each seat's
+  model is checked against this node's admin API. A seat whose model is not `active` sends the row
+  back with a refusal spent, and after `refusal_ceiling` refusals the row fails `MODEL_UNAVAILABLE`.
+- **Game state stays opaque.** No workflow interprets `wave_state`, an observation, an action or a
+  ref. The policy head is the one tensor the platform reads, because a manifest cannot decode it.
+- **A match's terms come from its season, on the claim.** That includes the strike ceiling, which is
+  read off the match row. A copy in runner config is dead config that a later edit would wire back in.
+- **`engine.ops_budget` equals Soma's `adapter_ops_max`.** Otherwise a model is admitted under one
+  ceiling and struck under another.
+- **`models.max_timeout_ms` is at least the season ceiling for `turn_ms` (60000).** Orion silently
+  clamps `model_infer`'s deadline to it.
+- **The drain order holds.** Keep `stop_grace_period` (2760 s) above drain + force (5 + 2700 s), and
+  force at or above `cron.shutdown_timeout_secs`. Both must be above the match channel timeout
+  (2400 s). If this breaks, rows stay `running` with a live lease until the reap frees them.
 
-## Status
+## Known gaps
 
-**19 September 2026 — the board rides the claim (N28).** The component carries no boards and presets
-are gone, so `world` passes `worldgen` the row's `map` -- the board, whole, from the `season_maps` row
-pair pinned -- and `players`, and no `preset`; `K_ROW` joins `season_maps` as the gate's claim does,
-and the `kalam` role reads `season_maps (id, map_id, board)` and nothing else of it. The replay
-envelope keeps `map_id` and `map` and drops `preset`. `check-defs.sh` and `check-sql.sh` clean; on the
-rebuilt local stack the runner played every enabled board it claimed, and `tinybrains conform`
-re-ran one of its replays identically. The runner image changes for a new engine, never for a
-season's boards.
+- A runner on another network is untested. Every rehearsal reached the gate through
+  `host.docker.internal`, a private address, so `kalam-api` refusing private addresses has never
+  refused anything for real.
+- Mixed-engine rollout, where runners on two digests drain and claim past each other, has never been
+  exercised.
+- `tb-match-run` keeps sweeping to its loop max (1010) after the match finishes, with every task
+  skipped.
+- The same loop max caps a match at about 1000 turns. A season may set `max_turns` up to 100000,
+  and a match that runs past the cap can't finish.
+- Orion's `Message.audit_trail` keeps old and new values for every task execution, and there is no
+  setting to turn it off.
+- Every cron run mints a ten-minute token and uses it once. A longer-lived token would halve an idle
+  runner's calls and lift the per-address runner limit.
+- `check-sql.sh` does not descend into task groups, so the grouped `db`-mode statements (reap, claim,
+  row) are not prepared.
+- `match_concurrency` in the runner config is read by nothing, and in api mode neither is
+  `refusal_ceiling`.
+- The `db`-mode branch is still in the package as a rollback. CLAUDE.md has the removal checklist.
 
-**17 September 2026 (night) — a runner image and its compose file, released on a tag.** The image is
-now a runnable node — `orion-server`, `docker/runner.toml.tmpl` (from devops' `compose/orion/`), the
-package and the engine — and `docker/entrypoint.sh` loads the package at boot, as devops' runner
-compose did with `RUNNER_SELF_LOAD`. `docker-compose.yml` is that one service, needing only Soma's
-URL, a key and the deployment's trust key; the `db`-mode replica config stayed in devops, and no
-image runs it (N25). The reference observations left the package again: Soma's image registers the
-cartridge now. Against web's new local stack the runner loaded, activated five channels and reached
-the gate at `host.docker.internal:8080`. `.github/workflows/release.yml` publishes
-`ghcr.io/tiny-brains/kalam` for amd64 and arm64 on a `v*` tag; the root `.gitignore`'s `workflows/`
-was ignoring `.github/workflows/` too, and is anchored now.
+## License
 
-**17 September 2026 (night) — the cartridge comes from ants' release, not its image.** `ants` ships
-no Docker image any more (devops N24); its workflow publishes GitHub releases. `Dockerfile` fetches
-the latest with curl (`ANTS_RELEASE` names a tag instead; `releases.atom`, ADDed first, is what
-refreshes the cached layer when a new release lands), checks the viewer inside was transpiled
-from the component beside it, and takes the component, both plugin manifests and `cartridge.json`
-as before — plus `reference/observations.json`, which the loader used to read from a mount of the
-ants image and now reads from this package. Built from `engine-df312c0458d9`, the four files it
-already carried are byte-identical to the image-built package's.
-
-**17 September 2026 (night) — an eliminated colony is not asked for a move.** Found on the first
-ladder with three seats or more: a colony with no ants stays in the match, `observe` still sends
-it a view with an empty `mine`, and its decoded action is `[]` — falsy, so the strike test read an
-answer as a miss. Five turns on, the dead seat was forfeited, ranked `engine_rank + seat_count`
-under seats it had outscored (an `open-5` seat on 4 points ranked below one on 2), and drawn as
-a disqualification. A two-seat match ends the turn a colony empties, so the ladder had never
-reached it. `seat_plays` now also requires an ant in the seat's view, so such a seat is neither
-inferred, struck nor charged a seat-turn. `devops/cli/src/wave.rs` never struck such a seat — its
-decoder answers `[]`, not null — so the two implementations disagreed on every match a colony
-died in; it now omits the seat too, and they agree again.
-
-**17 September 2026 (evening) — up to eight seats, and the lease sized by them.** `MAX_SEATS` is 8,
-the platform's ceiling, where it was 4: Ants now ships sixteen presets from two seats to eight, and a
-ceiling below that is a preset the ladder pairs and no replica claims. Nothing else about a match
-reads the constant — every seat task is conditioned on the row's `seat_count`, so a two-seat match
-costs what it did. `tb-match` is 65 tasks where it was 53. In `db` mode `renew_every_n_turns` is now
-clamped by the row's seat count as the gate's already was by a fixed three, and both now use
-`floor(lease_seconds × 1000 / ((seat_count + 1) × turn_ms))`: an eight-seat turn can cost nine
-deadlines. The runner gate's copy is Soma's (`soma-runner-claim`); the two were changed together.
-
-**16 September 2026 (merge) — the clocks Kalam's rows come from are Soma's.** `jodi` merged into
-`soma`, so the pair clock that inserts a match and the count clock that folds it now ship in the soma
-package. Nothing Kalam reads or writes changed: the rows, the grants and every statement are the
-same, and `check-sql.sh`'s `rated_at` refusal now names Soma as the counter. References renamed.
-
-**16 September 2026 (later) — one `allow_private_urls` could not express a runner's posture.**
-`kalam-orion` is this node's own admin API at `127.0.0.1:8080`, and 127/8 is private, so off-site a
-runner needs `kalam-api` **refusing** private addresses and `kalam-orion` **permitted** one at the
-same time. `load-package.sh` drove all six connectors from one variable; `kalam-orion` is now
-unconditionally `true`, because the guard is about egress to somewhere else and a node calling
-itself is not that. Driven off the shared variable, an off-site runner's roster clock could not reach
-its own node — and a roster that never catches up refuses every seat.
-
-**`models.max_timeout_ms` was quietly capping the season's `turn_ms`.** `model_infer` asks for the
-claim's value and Orion reduces it with `v.min(…)` without a word, so a replica carrying `1000`
-playing a season at `5000` gave every model one second while the match was scored as if it had five.
-It is `60000` now — `season_rule_spec()`'s own ceiling, not a generous number — and `arch` is derived
-from `uname` rather than defaulting to a literal `amd64` that was wrong on every machine here.
-
-**16 September 2026 — the runner speaks HTTP, and holds no database credential.** `KALAM_MODE=api`
-runs the same task list against `/v1/runner/*` instead of `kalam-db`: eight of the nine
-`db_read`/`db_write`/`storage_presign` tasks become `http_call`, and the ninth — `K_REAP` — is
-**deleted**, because the gate runs it as one cron channel at the centre rather than as every
-caller's first task.
-
-**The two modes meet at `data.ct`, the execution contract**, and below that line the run does not
-know which it is in. In `api` the contract is what the claim answered; in `db` it is built from
-`[vars]`, and it has to be — soma's copy of the read-back joins `seasons` and `games`, and the
-`kalam` role is granted neither, deliberately.
-
-**One call does what three tasks do in `db` mode.** The claim route claims, reads the row back and
-answers with the contract and a claim token the *gate* mints — a runner picking its own could
-collide with another's, and a uuid is free to generate at either end.
-
-**Proved by `conform`, not by argument.** Two matches played end to end through the gate, 1000 turns
-each, came back **IDENTICAL — every field, and all 1000 turns of the action stream** against a local
-re-play. That is the only test that can tell whether moving the claim to HTTP changed how a match is
-*played* rather than how it is *recorded*.
-
-**Three things this turned up**, each now recorded where it bites — `devops/docs/decisions.md` N9,
-the platform guide, and this repo's `CLAUDE.md`: the gate's idle answer had to stop being a bodyless
-`204`, because `http_call` parses every response as JSON; the replay bucket needed a *third*
-address, because SigV4 signs the host and the gate must sign for the one the runner dials; and **a
-route's request field names are the contract** — sending `seats` where the route binds `result`
-produced a `409 claim_lost`, naming the one thing that was fine.
-
-**15 September 2026 — the match lanes stop recording task detail.** `task_details` is `false` on
-`match_channel_config`, and that one flag was costing a replica ~11 GiB. It made every cron run
-capture a full `ExecutionTrace`, whose `changes` — the old **and** new value of every write — is
-built outside `max_snapshot_bytes`: that budget covers `snapshots` and `mapping_contexts` and
-nothing else. A match writes a `[1,5,H,W]` policy tensor per seat per turn and re-writes
-`data.state` and `data.deltas` beside it, across all 1010 sweeps, so one match's trace serialized to
-287 MB at the median and 1.98 GB at the worst. `errors_only` saves none of it: the trace is built,
-then serialized, and only then dropped. Measured 28.6 GB of trace JSON per 15 minutes and 11.1 GiB
-RSS on the replica that was playing, against 98 MiB on the idle one running the same image. After:
-no match trace warning since the reload, and a peak of 1.5 GiB across four concurrent lanes.
-
-`tb-roster` keeps its detail — 34 sweeps and no tensors. Two things this did **not** fix, both
-worth their own change: `Message.audit_trail` accumulates the same old+new values per task
-execution no matter what, because `capture_changes` defaults to `true` and Orion exposes no knob
-for it; and the loop still runs all 1010 sweeps after the game has ended, which on a 333-turn
-standard match is most of them.
-
-**15 September 2026 — the definitions say each thing once.** `shared/kalam.json` holds the clock
-tracing block the five channels copied and the `config` all four `tb-match-N` lanes share — the
-lanes now differ in `channel_id` and `concurrency.key` and nothing else, which is the whole of what
-makes them separate lanes. The generator gained `group_runs()`, which collapses each run of
-consecutive tasks sharing one condition into a task group carrying it once, and the no-op
-`terminal` on the last step is gone. `orion-server clippy` went from 9 findings to 0.
-
-`scripts/load-package.sh` is now `orion-server compile` + `orion-server package apply`; its sweep
-skips any kind the artifact has none of, **which this package is the reason for** — the cartridge
-comes from ants' image, so a checkout with no `plugins/` compiles to an artifact with no plugins,
-and an unguarded sweep would delete `tb.ants`. New: `scripts/check-defs.sh`, the no-stack gate.
-Verified on both live replicas: `tb.ants` loaded, 5 cron channels, 0 quarantined, and the engine
-digest agreeing across `games.active_engine_digest`, the live season and both nodes.
-
-**14 September 2026 — the wave is gone, and so is Axon.** This package is two clocks now:
-`tb-match` claims one row and plays it with one `model_infer` per seat, and `tb-roster` keeps this
-node's model set in step with `model_versions`. Orion 1.8.1's `models` entity is what Axon was — it
-fetches the artifact from the bucket by digest, re-hashes it, reads the graph and runs it under
-`tract`, and a competitor's adapter is JSONLogic evaluated by the same engine that evaluates this
-workflow. The wave existed to amortise one batched inference call across many seats, and every Ants
-map is two-player; the batching it bought was measured at 1.11x. Verified on a live stack: three
-baselines registered, admitted and activated by the roster clock, matches finishing `lone_survivor`
-and `rank_stabilized` with zero strikes, and Jodi folding the results into ratings.
-devops/docs/decisions.md, the R-series.
-
-**11 September 2026 — the strike ceiling survives the first turn.** The change below put
-`strike_ceiling` on the turn-0 refs, but `acts` rebuilds the refs every turn and did not carry it:
-from turn 1 the forfeit test read a null ceiling, `{">=": [n, null]}` is true, every seat forfeited,
-and on turn 2 an empty `/play` reached `step` as `BAD_ACTION: 0 actions for N live seats`. Every
-wave on a fresh stack died that way, and the rows it had claimed sat `running` until their leases
-lapsed. The rebuilt ref carries the ceiling now; waves play to `lone_survivor`, `rank_stabilized`
-and `idle_food`, and fold.
-
-**10 September 2026 — the strike ceiling comes off the match row.** `matches.strike_ceiling` is
-stamped by pair from the season's rules and rides the refs to every seat, so the wave that applies
-it and the clock that judges its result read one value from one place. Kalam's own
-`[vars] strike_ceiling` is deleted, and with it `configs.sh`'s equality assertion: the documented
-cross-repo footgun is gone because Kalam stops keeping a second copy, not because Jodi stopped
-keeping the first. The replay envelope carries it too, so `tinybrains conform` replays a match at
-the ceiling it was played under.
-
-Nothing else changed. Kalam still never joins the roster, and it never learns that
-`match_seats.version_id` names a version rather than an entry.
-
-**10 September 2026 — the package ships as an image, and the engine is no longer vendored.**
-`channels/`, `workflows/` and `plugins/` are gitignored; `Dockerfile` builds the package and devops
-copies it into a volume, which both the loader and every replica mount where they used to mount this
-checkout. `connectors/` is the authored part and is copied through. Both generated declarations are
-byte-identical to the ones that were committed.
-
-**`scripts/vendor-engine.sh` is deleted, and with it the drift it made possible.** The component
-used to be copied into `plugins/tb-ants/` and committed, so two copies of one engine existed and
-nothing errored when they diverged — the ladder played a component ants does not ship, with a viewer
-built against the other. The image now takes the component straight from the cartridge's own
-artifact image, named by `ANTS_REF`, so there is one copy and the two cannot disagree.
-
-**The engine digest moved from `sha256:f17b51b6…` to `sha256:0807b641…`**, declared as a *patch*
-rather than a release: `ants`' `cartridge.json` and `reference/observations.json` are byte-identical
-across the change, so no rule moved and the live season kept its ratings and took the new digest.
-(It has moved again since — R5 put the visibility mask in `observe`, which **is** a protocol change,
-and the engine the ladder plays today is `sha256:185a2845…`. Nothing here names a digest; read it
-from `games.active_engine_digest` or from `tinybrains games`, and treat any digest written in prose
-as the date it was written.)
-Verified on the running stack — `games.active_engine_digest`, the live season, and both replicas'
-`[vars] engine_digest` all read the same value, no channel quarantined. The loader also registers
-the engine's own 10-observation reference set now, rather than a single worst-case fixture
-standing in for it.
-
-**Per-seat cost, 10 September 2026.** The wave accumulates the loader's `infer_us` per seat across
-the match — three counters on the `refs` element, exactly where `strikes` lives and for the same
-reason — and writes them to `match_seats` at finish. The replay envelope's `seats` gets them for
-nothing, since it is `hrefs.items`. Verified end to end on the running stack, and a
-platform-written replay still conforms IDENTICAL against a local re-play over all 150 turns.
-
-**Engine re-vendored, 10 September 2026.** The committed `tb-ants.wasm` was `sha256:254549b4` while
-ants shipped `sha256:1555f081`, so `devops/scripts/check/configs.sh` was failing on the committed
-tree and local play and the fleet were running different engines. Re-vendored and re-signed.
-
-**10 September 2026.** The wave, replay upload, claim recovery, drain and the vendored engine are
-implemented and have run against real rows in a real replica. Orion 1.8.1 package lint passes and
-check-sql.sh checks the database contract; a running DevOps stack is still required to validate
-play, drain and recovery. Open: mixed-engine rollout verification, and the memory branch of the
-residency barrier, which no deployed model has yet been large enough to take. Lint or readyz alone
-must not be reported as a working match loop.
-
-## More
-
-- Local references: [wave generator](scripts/gen-kalam.py), [engine ABI](plugins/tb-ants/plugin.json), and [SQL check](scripts/check-sql.sh).
-- Design docs: [`docs/design.md`](docs/design.md) — the wave, the lease, the finish, and drain.
-- [The competitor guide](https://github.com/Tiny-Brains/web/tree/main/docs) — the reader-facing half: the rules, the model format, the adapter dialect, submitting, ranking and seasons. The platform section is the high-level design for someone new to the codebase.
-- Related repositories: [Soma](https://github.com/Tiny-Brains/soma), [Ants](https://github.com/Tiny-Brains/ants).
-- Apache-2.0: see [LICENSE](LICENSE).
+Apache-2.0. See [LICENSE](LICENSE).
