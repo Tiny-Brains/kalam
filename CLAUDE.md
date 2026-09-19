@@ -121,8 +121,10 @@ Orion:
 - **Keep `task_details: false` on the match lanes.** With it on, Orion builds a full trace of every
   write, the per-seat policy tensors included, outside `max_snapshot_bytes`, and `errors_only` drops
   it only after it has been built and serialized. A runner's memory then grows by gigabytes.
-- **Loop bounds.** `tb-match-run` loops at most 1010 sweeps: one per turn plus the finishing sweep,
-  so it is also the ceiling on `max_turns`. `[engine] max_loop_iterations` must sit above it. The
+- **Loop bounds.** `tb-match-run` loops at most `MATCH_LOOP_MAX` (1010) sweeps: one per turn plus
+  the finishing sweep, so it is also the ceiling on `max_turns`, which Soma's `season_rule_spec()`
+  caps at 1000 to match. web's `configs.sh` reads the `MATCH_LOOP_MAX = <n>` line, so keep that
+  exact form. `[engine] max_loop_iterations` must sit above it. The
   lane's `timeout_ms` (40 min) is sized for 1000 turns × 1000 ms plus overhead, and the shutdown
   force timeout (2700 s) must stay above it.
 - **`models.max_timeout_ms` clamps `model_infer`'s deadline silently.** It must be at least the
@@ -168,7 +170,6 @@ Other:
   non-deterministic out of the other fields.
 - **`engine.ops_budget` must equal Soma's `adapter_ops_max`,** and `orion_version` must equal Soma's.
   web's `configs.sh` checks both.
-- **`check-sql.sh` walks only top-level tasks.** Statements inside a task group are not prepared.
 
 ## Removing db mode
 

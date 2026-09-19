@@ -31,19 +31,29 @@ cat "$MIGRATIONS"/0001_init.sql "$MIGRATIONS"/0002_sessions.sql \
 # Parameter types are left to Postgres. Every statement writes its placeholders as ($1)::type, so
 # inference has everything it needs -- and one that stopped doing that would be ambiguous to the
 # server too, which is worth failing on.
+# It walks INTO TASK GROUPS: the generator folds each run of tasks sharing a condition into a group,
+# and a walker that reads only the top-level list misses the grouped statements.
 echo "==> preparing every query in workflows/*.json"
 python3 - workflows/*.json <<'PY' | psql -d "$SCRATCH" -q -v ON_ERROR_STOP=1
 import json, sys
 
+def statements(tasks):
+    """Every query in the list, descending into task groups."""
+    for task in tasks:
+        yield from statements(task.get("tasks", []))
+        query = task.get("function", {}).get("input", {}).get("query")
+        if query:
+            yield task["id"], query
+
+n = 0
 for path in sys.argv[1:]:
     doc = json.load(open(path))
-    for task in doc.get("tasks", []):
-        query = task.get("function", {}).get("input", {}).get("query")
-        if not query:
-            continue
-        name = f"chk_{doc['workflow_id']}_{task['id']}".replace("-", "_")
-        print(rf"\echo '  {doc['workflow_id']} / {task['id']}'")
+    for task_id, query in statements(doc.get("tasks", [])):
+        n += 1
+        name = f"chk_{doc['workflow_id']}_{task_id}".replace("-", "_").replace(".", "_")
+        print(rf"\echo '  {doc['workflow_id']} / {task_id}'")
         print(f"PREPARE {name} AS {query};")
+print(rf"\echo '-- {n} statements'")
 PY
 
 # The other half of "this statement will work": a role can PREPARE a statement it would be refused

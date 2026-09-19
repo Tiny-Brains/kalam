@@ -39,6 +39,11 @@ ENGINE = "tb.ants"
 # and web's configs.sh holds this at least that high.
 MAX_SEATS = 8
 
+# How many sweeps a match lane's loop may run: one per turn, plus the sweep that finishes. So it is
+# a ceiling on max_turns too -- a match needs max_turns + 1 sweeps -- and Soma's season_rule_spec()
+# caps execution.max_turns below it. web's configs.sh reads this `MATCH_LOOP_MAX = <n>` line.
+MATCH_LOOP_MAX = 1010
+
 # The action alphabet, and the ONE place the platform knows it. It is the cartridge's, published in
 # the competitor guide's *What your model answers* -- a per-cell head's channel order is part of the
 # game's contract, not the competitor's.
@@ -1048,10 +1053,8 @@ MATCH = {
     ),
     "tags": ["pkg:kalam"],
     "condition": True,
-    # One sweep per turn, plus the sweep that finishes. `max_turns` is the game's bound and this is
-    # the runaway bound above it -- so it is also a ceiling on max_turns: a match needs
-    # max_turns + 1 sweeps to finish.
-    "loop": {"counter": "i", "max": 1010},
+    # One sweep per turn, plus the sweep that finishes: see MATCH_LOOP_MAX.
+    "loop": {"counter": "i", "max": MATCH_LOOP_MAX},
     "tasks": MATCH_TASKS,
 }
 

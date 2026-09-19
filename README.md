@@ -311,14 +311,10 @@ plugins/tb-ants/               optional local engine for lint (gitignored)
   exercised.
 - `tb-match-run` keeps sweeping to its loop max (1010) after the match finishes, with every task
   skipped.
-- The same loop max caps a match at about 1000 turns. A season may set `max_turns` up to 100000,
-  and a match that runs past the cap can't finish.
 - Orion's `Message.audit_trail` keeps old and new values for every task execution, and there is no
   setting to turn it off.
 - Every cron run mints a ten-minute token and uses it once. A longer-lived token would halve an idle
   runner's calls and lift the per-address runner limit.
-- `check-sql.sh` does not descend into task groups, so the grouped `db`-mode statements (reap, claim,
-  row) are not prepared.
 - `match_concurrency` in the runner config is read by nothing, and in api mode neither is
   `refusal_ceiling`.
 - The `db`-mode branch is still in the package as a rollback. CLAUDE.md has the removal checklist.
