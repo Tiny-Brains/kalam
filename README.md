@@ -212,6 +212,15 @@ docs/orion-notes.md          what building the package found in Orion
 
 ## Status
 
+**19 September 2026 — the board rides the claim (N28).** The component carries no boards and presets
+are gone, so `world` passes `worldgen` the row's `map` -- the board, whole, from the `season_maps` row
+pair pinned -- and `players`, and no `preset`; `K_ROW` joins `season_maps` as the gate's claim does,
+and the `kalam` role reads `season_maps (id, map_id, board)` and nothing else of it. The replay
+envelope keeps `map_id` and `map` and drops `preset`. `check-defs.sh` and `check-sql.sh` clean; on the
+rebuilt local stack the runner played every enabled board it claimed, and `tinybrains conform`
+re-ran one of its replays identically. The runner image changes for a new engine, never for a
+season's boards.
+
 **17 September 2026 (night) — a runner image and its compose file, released on a tag.** The image is
 now a runnable node — `orion-server`, `docker/runner.toml.tmpl` (from devops' `compose/orion/`), the
 package and the engine — and `docker/entrypoint.sh` loads the package at boot, as devops' runner

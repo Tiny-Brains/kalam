@@ -31,12 +31,13 @@ PKG = pathlib.Path(__file__).resolve().parent.parent
 ENGINE = "tb.ants"
 
 # How many seats a match may have and still be claimed here. The seat count a match is PLAYED at is
-# never this: it is the row's `seat_count`, which pair copied from the preset, which the map declares
-# -- every seat task below is conditioned on it, so a two-seat match runs two inferences a turn and
+# never this: it is the row's `seat_count`, which pair's insert read off the board the match is played
+# on (N28) -- every seat task below is conditioned on it, so a two-seat match runs two inferences a turn and
 # skips the rest. This is only the ceiling of the fixed task list, and it is the platform's: mapgen's
 # `MAX_SEATS` refuses a recipe above eight, and the site draws two to eight. A ceiling below that is
-# a preset the ladder pairs and no replica can claim; the claim refuses anything wider rather than
-# playing it short a seat.
+# a board the ladder pairs and no replica can claim; the claim refuses anything wider rather than
+# playing it short a seat. An upload above the cartridge's `limits.boards` seats is refused by Soma,
+# and web's configs.sh holds this at least that high.
 MAX_SEATS = 8
 
 # The action alphabet, and the ONE place the platform knows it. It is the cartridge's, published in
@@ -193,13 +194,13 @@ UPDATE matches
 # --- 4.2 claim, and it takes ONE row. $1 engine digest · $2 token · $3 lease seconds · $4 seats.
 #
 # What went with the wave: the resident-weights affinity ordering (an optimisation of a residency
-# model that no longer exists -- the session cache loads on demand) and the preset grouping (which
+# model that no longer exists -- the session cache loads on demand) and the board grouping (which
 # existed so one `observe` call could serve a whole wave of one board). What stays: trials first,
 # then oldest, and `FOR UPDATE SKIP LOCKED` so N replicas and N match channels take disjoint rows
 # rather than queueing behind each other.
 #
 # `seat_count <= $4` is new and deliberate. A seat is a task and the task list is fixed, so a
-# 6-player preset must not be claimed by a replica that can only play four: refusing to claim is
+# 6-seat board must not be claimed by a replica that can only play four: refusing to claim is
 # visible in the queue, playing it short a seat would be a match nobody could explain.
 K_CLAIM = """
 WITH pick AS MATERIALIZED (
@@ -218,11 +219,13 @@ UPDATE matches m
 # still has an `m`, and it is 0 for the whole run.
 #
 # `model` is DERIVED here rather than stored: the version id is the model id (R9), so a row and a
-# node cannot disagree about what to call a model. `weights_hash` and `manifest_hash` are carried
+# node cannot disagree about what to call a model. `map` is THE BOARD, whole, from the season_maps
+# row the match was paired on (N28): the component carries no boards, so the row carries its own --
+# exactly as the gate's claim does, and the two are changed together. `weights_hash` and `manifest_hash` are carried
 # for the replay envelope -- the record of what was paired, not what the version row says today.
 K_ROW = """
 SELECT json_build_object(
-         'id', m.id, 'seed', m.seed, 'preset', m.preset, 'seat_count', m.seat_count,
+         'id', m.id, 'seed', m.seed, 'map_id', sm.map_id, 'map', sm.board, 'seat_count', m.seat_count,
          'trial_model_id', m.trial_version_id, 'strike_ceiling', m.strike_ceiling,
          'seats', (SELECT json_agg(json_build_object(
                      'm', 0, 'seat', s.seat, 'version_id', s.version_id,
@@ -232,6 +235,7 @@ SELECT json_build_object(
                      'manifest_hash', s.manifest_hash) ORDER BY s.seat)
                     FROM match_seats s WHERE s.match_id = m.id)) AS row
   FROM matches m
+  JOIN season_maps sm ON sm.id = m.season_map_id
  WHERE m.claim_token = ($1)::uuid AND m.status = 'claimed'
 """
 
@@ -637,8 +641,9 @@ MATCH_TASKS = [
 
     task("world", "Build the world", plugin(f"{ENGINE}.worldgen", {
         "seeds": [var("data.row.seed")],
-        "preset": var("data.row.preset"),
-        # The preset carries the seat count and the engine refuses a caller that disagrees, so
+        # The board, whole, off the claimed row: the component carries none (N28).
+        "map": var("data.row.map"),
+        # The board carries the seat count and the engine refuses a caller that disagrees, so
         # passing it is a free check rather than a parameter.
         "players": var("data.row.seat_count"),
         "max_turns": var("data.ct.max_turns"),
@@ -888,10 +893,9 @@ MATCH_TASKS += [
             "match_id": var("data.row.id"),
             "attempt_token": var("data.token"),
             "seed": var("data.row.seed"),
-            "preset": var("data.row.preset"),
             # THE BOARD. A replay is self-sufficient or it is not viewable: `replay-decode`
-            # rebuilds the match from `map`, so a replay stays viewable when the preset table has
-            # been re-tuned or the catalogue has moved on.
+            # rebuilds the match from `map`, so a replay stays viewable whatever becomes of the
+            # season's maps -- a board disabled, or a season closed and archived.
             "map_id": var("temp_data.res.map_id"),
             "map": var("temp_data.res.map"),
             # WHO SAT WHERE, by hash -- not identity, but enough that a replay can be RE-RUN and

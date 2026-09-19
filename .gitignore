@@ -30,3 +30,6 @@ plugins/*/*.wasm.sig
 # the committed shape of the first; the second belongs to whoever holds the trust key.
 .env
 keys/
+
+# A machine's own compose override: which engine this checkout builds against (see its header).
+docker-compose.override.yml

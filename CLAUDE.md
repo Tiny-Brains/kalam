@@ -160,10 +160,13 @@ means reading through the admin API's `data` envelope: `temp_data.m0.data.status
 **A seat is a task.** The task list is fixed, so `MAX_SEATS` (8) `model_infer` tasks are generated,
 each conditioned on the seat existing, being live and not having forfeited — and the claim refuses
 a row with more seats than that rather than playing it short one. **The seat count a match is played
-at is the row's**, which pair copied from the preset, which the map declares: a two-seat match runs
-two inferences a turn and skips six. `MAX_SEATS` is only the task list's ceiling, and it is the
-platform's — mapgen refuses a recipe above eight and the site draws two to eight — so no preset the
-ladder pairs is one a replica cannot claim. **The renew interval is clamped by the row's seat count**
+at is the row's**, which pair's insert reads off the board it pinned, which states its own seats: a
+two-seat match runs two inferences a turn and skips six. `MAX_SEATS` is only the task list's ceiling,
+and it is the platform's — mapgen refuses a recipe above eight, the cartridge's `limits.boards` stops
+at eight, and Soma refuses a season map above that — so no board the ladder pairs is one a replica
+cannot claim. **The board rides the claim** (N28): the row carries `map`, whole, and `world` passes it
+to `worldgen`, because the component carries no boards; `K_ROW` joins `season_maps` for it exactly as
+the gate's claim does. **The renew interval is clamped by the row's seat count**
 in both modes, `renew_every_n_turns × turn_ms × (seat_count + 1) ≤ lease_seconds`, because a turn can
 cost every seat's deadline plus the step.
 

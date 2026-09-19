@@ -146,13 +146,14 @@ above it.
 
 **The claim takes one row, trials first, then oldest, `FOR UPDATE SKIP LOCKED`.** What went with the
 wave: the resident-weights affinity ordering — an optimisation of a residency model that no longer
-exists — and the preset grouping, which existed so one `observe` could serve a whole wave of one
+exists — and the board grouping, which existed so one `observe` could serve a whole wave of one
 board.
 
 **`seat_count <= $4` is new and deliberate.** A seat is a task and the task list is fixed, so
 `MAX_SEATS` (8) `model_infer` tasks are generated and the claim refuses a wider row rather than
-playing it short a seat. The catalogue ships sixteen presets from two seats to eight, and eight is
-exactly the ceiling mapgen enforces, so every preset the ladder pairs is one a replica can claim.
+playing it short a seat. A season's boards run from two seats to eight -- `limits.boards`, which Soma
+checks every upload against -- and eight is exactly the ceiling mapgen enforces, so every board the
+ladder pairs is one a replica can claim (N28).
 The seat count played is always the row's: every seat task is conditioned on `seat_count`.
 
 ### 4.2 The roster barrier
@@ -328,8 +329,8 @@ Written per attempt under a key naming the token, so a stale attempt's blob is a
 a replacement for the one that counted.
 
 ```jsonc
-{ "match_id": "…", "attempt_token": "…", "seed": …, "preset": "open-2",
-  "map_id": "…", "map": { … },       // the board, so a replay outlives a preset re-tuning
+{ "match_id": "…", "attempt_token": "…", "seed": …,
+  "map_id": "…", "map": { … },       // the board, so a replay outlives its season's maps
   "seats": [ … ],                    // who sat where, by hash
   "max_turns": 1000,
   "engine_digest": "sha256:…", "orion_version": "1.8.1",
