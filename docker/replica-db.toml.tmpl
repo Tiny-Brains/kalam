@@ -48,9 +48,9 @@ engine_digest = "${KALAM_ENGINE_DIGEST}"
 mode = "${KALAM_MODE:-db}"
 
 # THE RUNNER'S CREDENTIAL, and the whole of what a machine needs to play matches: no connection
-# string, no bucket secret, no admin token. Minted from the admin UI, or by
-# scripts/dev/runner-key.sh on a dev stack. Exchanged for a ten-minute `aud: runner` token, so the
-# key itself is presented once per refresh and never accompanies a match write.
+# string, no bucket secret, no admin token. Minted from the admin UI. Exchanged for a ten-minute
+# `aud: runner` token, so the key itself is presented once per refresh and never accompanies a match
+# write.
 runner_key   = "${KALAM_RUNNER_KEY:-}"
 # WHICH MACHINE THIS IS. The gate upserts a `runners` row on (key_id, label), so a runner
 # self-registers rather than being enrolled: two machines on one key are two rows, and the label is

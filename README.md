@@ -37,7 +37,7 @@ README says):
    bucket and the replay endpoint at this machine, sets `RUNNER_SIG_DIR=../web/keys/signatures`, and
    sets `RUNNER_ALLOW_PRIVATE_URLS=1`.
 2. Copy `TB_TRUST_PUBLIC_KEY`, `MODELS_READ_ACCESS_KEY` and `MODELS_READ_SECRET_KEY` from web's `.env`.
-3. `RUNNER_KEY`: mint one with web's `scripts/dev/runner-key.sh`.
+3. `RUNNER_KEY`: mint one on the admin Runners page.
 4. `ORION_ADMIN_KEY`: `openssl rand -hex 32`.
 5. `docker compose up -d --build`.
 
