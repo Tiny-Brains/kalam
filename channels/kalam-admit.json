@@ -1,6 +1,7 @@
 {
   "channel_id": "kalam-admit",
   "name": "kalam-admit",
+  "description": "An admitting runner's only channel, loaded when RUNNER_ROLE=admit: one submission a tick, claimed from Soma's gate, admitted and probed on this node, and reported back for Soma to judge. 10 minutes, because a walk of the reference observations is the slowest thing this package does.",
   "tags": ["kalam", "clock", "admission"],
   "channel_type": "async",
   "protocol": "cron",

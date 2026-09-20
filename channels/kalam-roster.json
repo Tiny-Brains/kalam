@@ -1,6 +1,7 @@
 {
   "channel_id": "kalam-roster",
   "name": "kalam-roster",
+  "description": "Reconciles this node's model set against the ladder, one version a tick: register what this node lacks, activate what has passed. A model is a per-node entity and no clock ever calls a replica, so this is how a node catches up -- and a node that has not caught up releases the row rather than playing blind.",
   "tags": ["kalam", "clock", "models"],
   "channel_type": "async",
   "protocol": "cron",

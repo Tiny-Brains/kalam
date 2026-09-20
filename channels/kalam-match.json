@@ -1,6 +1,7 @@
 {
   "channel_id": "kalam-match",
   "name": "kalam-match",
+  "description": "How many matches this node plays at once: `concurrency.slots` concurrent runs, each claiming one queued row on this runner's engine digest and playing it to the end. entrypoint.sh writes this node's lane count into `slots` -- Orion takes lock cardinality as an authoring decision, so it is a literal and never a reference. misfire_policy `skip`: a missed tick is a lane that was busy.",
   "tags": ["kalam", "clock", "matches"],
   "channel_type": "async",
   "protocol": "cron",

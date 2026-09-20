@@ -42,6 +42,9 @@ for p, ch in channels.items():
     cid = ch["channel_id"]
     if p.name != cid + ".json":  bad(p, f"the file name must be the id: {cid}.json")
     if ch.get("name") != cid:    bad(p, f"name must equal the id ({cid!r}), not {ch.get('name')!r}")
+    if not (ch.get("description") or "").strip():
+        bad(p, "no description; a channel's own line says what IT decides -- the auth mode, the "
+               "rate-limit class, the cache policy -- which the workflow's description does not")
     if not cid.startswith(PACKAGE + "-"):
         bad(p, f"an id is {PACKAGE}-<name>")
     if ch.get("protocol") != "cron":
