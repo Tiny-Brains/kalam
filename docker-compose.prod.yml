@@ -13,7 +13,7 @@
 #   no private URLs KALAM_ALLOW_PRIVATE_URLS is empty and NOT read from the environment: a redirect or a
 #                   DNS answer pointing this runner into the network behind it is refused
 #   production      ORION_ENVIRONMENT=production, which refuses an admin key under 32 characters
-#   logging         Orion logs JSON without the per-request and per-workflow INFO lines, most of them
+#   logging         Orion logs JSON without the per-request, per-workflow and idle-poll INFO lines, most of them
 #                   this node's own roster calling its admin API; the log rotates
 #   one endpoint    R2_S3_ENDPOINT is both the models bucket and the replay store, as the deployment
 #                   signs them
@@ -77,7 +77,7 @@ services:
       ORION_ADMIN_AUTH__ENABLED: "true"
       ORION_ADMIN_AUTH__API_KEYS: ${ORION_ADMIN_KEY}
       ORION_LOGGING__FORMAT: json
-      RUST_LOG: ${ORION_RUST_LOG:-info,dataflow_rs::engine::workflow_executor=warn,orion::server::observability=warn}
+      RUST_LOG: ${ORION_RUST_LOG:-info,dataflow_rs::engine::workflow_executor=warn,dataflow_rs::engine::functions::filter=warn,orion::server::observability=warn}
 
       ORION_VERSION: ${ORION_VERSION:-1.8.1}
       ORION_SHUTDOWN_DRAIN_SECS: ${RUNNER_SHUTDOWN_DRAIN_SECS:-5}
