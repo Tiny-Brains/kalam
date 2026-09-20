@@ -257,6 +257,7 @@ is a call to Soma's gate. The per-seat tasks are written ONCE, over
 | Command | What it does | Needs |
 |---|---|---|
 | `./scripts/check-defs.sh` | `orion-server lint`, `clippy`, `fmt --check` over the whole set, and `clippy -c docker/runner.toml.tmpl` (all `--deny-warnings`) | `orion-server` in `shared/package.json`'s range, on `PATH` |
+| `./scripts/check-names.sh` | The ids and the three tags: `[kalam, clock, <domain>]`, the domain from the same closed list Soma uses | nothing; it reads the set |
 | `docker compose up -d --build` | Builds this checkout and runs it as a runner | Docker and a Soma |
 | `ORION_ADMIN=… ORION_ADMIN_API_KEY=… ./scripts/load-package.sh [--prune]` | Shapes this role's package, compiles it and applies it into a running node; `--prune` retires what the applied version carried and this one does not. `--compile-only -o <file>` stops after compiling, which is what `entrypoint.sh` calls at boot | `orion-server` |
 
