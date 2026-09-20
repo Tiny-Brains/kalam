@@ -59,6 +59,13 @@ services:
       MODELS_READ_SECRET_KEY: ${MODELS_READ_SECRET_KEY:?the deployment's read-only models token}
 
       PLUGIN_SIG_DIR: /sig
+      # THIS NODE'S OWN ADMIN API, which the roster clock registers and activates each model version
+      # through. `kalam-orion` names it as `env://KALAM_ORION_ADMIN`; an env:// that resolves to
+      # nothing SKIPS the connector, and the workflows that name it -- kalam-roster-run and
+      # kalam-admit-run -- then cannot activate, which the boot apply stops the node for. It is
+      # exempt from the posture below because it IS this node calling itself: the connector carries
+      # `allow_private_urls` itself, so this stays set even though KALAM_ALLOW_PRIVATE_URLS is empty.
+      KALAM_ORION_ADMIN: ${KALAM_ORION_ADMIN:-http://127.0.0.1:8080/api/v1/admin}
       TB_TRUST_PUBLIC_KEY: ${TB_TRUST_PUBLIC_KEY:?copy it from the deployment}
       # THIS MACHINE'S OWN, not the deployment's: openssl rand -hex 32. Production refuses a shorter one.
       ORION_ADMIN_KEY: ${ORION_ADMIN_KEY:?openssl rand -hex 32}
