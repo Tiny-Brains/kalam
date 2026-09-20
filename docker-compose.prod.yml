@@ -48,6 +48,12 @@ services:
       # replay PUT is signed for it (SigV4 signs the host), and model GETs are signed with the key below.
       MODELS_BUCKET: ${MODELS_BUCKET:-tinybrains-models}
       MODELS_ENDPOINT: ${R2_S3_ENDPOINT:?the deployment's R2 S3 endpoint, exactly as its .env has it}
+      # The host `kalam-blobs-put` dials, and the gate signs the replay PUT for it. It must equal
+      # web/docker-compose.prod.yml's RUNNER_BLOB_ENDPOINT character for character: SigV4 signs the
+      # host, so a mismatch is a 403 naming a signature and neither variable. WITHOUT IT the
+      # connector's `env://` resolves to nothing, the connector is skipped, `put` cannot activate
+      # and the boot apply stops the node.
+      RUNNER_BLOB_ENDPOINT: ${R2_S3_ENDPOINT}
       R2_ENDPOINT: ${R2_S3_ENDPOINT}
       # An R2 API token with Object Read on the models bucket and nothing else.
       MODELS_READ_ACCESS_KEY: ${MODELS_READ_ACCESS_KEY:?the deployment's read-only models token}
