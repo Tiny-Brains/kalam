@@ -1,13 +1,3 @@
-# gen-kalam.py is importable, and its bytecode is not the package.
-__pycache__/
-
-# THE BUILD OUTPUT IS NOT COMMITTED. It is generated into the runner image `Dockerfile` builds --
-# `ghcr.io/tiny-brains/kalam:<version>` published -- which loads it into its own node at boot.
-# `connectors/` and `shared/` are the authored part and are committed. `scripts/gen-kalam.py` writes
-# channels/ and workflows/ locally for the checks.
-/channels/
-/workflows/
-
 # THE ENGINE IS NOT OURS TO KEEP A COPY OF. A committed copy of the cartridge can drift from the
 # one ants ships, and NOTHING ERRORS when it does: the ladder plays a component ants does not ship.
 # `Dockerfile` fetches the component straight from the cartridge's own GitHub release

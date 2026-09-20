@@ -22,6 +22,7 @@
         "node_version": { "var": "metadata.vars.node_version" }
       },
       "output": "data.tok"
-    }
+    },
+    "seats": [0, 1, 2, 3, 4, 5, 6, 7]
   }
 }

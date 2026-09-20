@@ -5,8 +5,9 @@
   "tags": ["pkg:kalam"],
   "config": {
     "type": "http",
-    "url": "http://127.0.0.1:9000",
+    "url": "env://RUNNER_BLOB_ENDPOINT",
     "headers": { "content-type": "application/json" },
-    "retry": { "max_retries": 2, "retry_delay_ms": 250 }
+    "retry": { "max_retries": 2, "retry_delay_ms": 250 },
+    "allow_private_urls": "var://allow_private_urls"
   }
 }

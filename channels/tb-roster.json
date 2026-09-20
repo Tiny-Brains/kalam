@@ -1,0 +1,15 @@
+{
+  "channel_id": "tb-roster",
+  "name": "tb-roster",
+  "tags": ["pkg:kalam"],
+  "channel_type": "async",
+  "protocol": "cron",
+  "workflow_id": "tb-roster-run",
+  "transport_config": {
+    "schedule": "*/15 * * * * *",
+    "timezone": "UTC",
+    "misfire_policy": "skip",
+    "concurrency": { "policy": "forbid", "key": "roster" }
+  },
+  "config": { "timeout_ms": 120000, "tracing": { "$from": "constants.clock_tracing" } }
+}

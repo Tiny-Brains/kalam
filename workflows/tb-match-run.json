@@ -1,0 +1,1993 @@
+{
+  "workflow_id": "tb-match-run",
+  "name": "Kalam: one match, turn by turn",
+  "description": "Claim ONE queued row on this replica's engine digest and play it: observe, one `model_infer` per live seat, step, until the engine stops returning views. The row is finished in place, with its replay under a key naming the attempt. Every statement is conditioned on the claim token, so a stale attempt updates nothing. It reads no rating and writes no rating, and its database role cannot reach one. In `api` mode every statement is a call to Soma's runner gate (/v1/runner/*). On SIGTERM Orion stops claiming and lets the match in hand finish inside cron.shutdown_timeout_secs.",
+  "tags": ["pkg:kalam"],
+  "condition": true,
+  "loop": { "counter": "i", "max": 1010 },
+  "tasks": [
+    {
+      "id": "when_token",
+      "condition": { "==": [{ "var": "temp_data.i" }, 0] },
+      "tasks": [
+        {
+          "id": "token",
+          "name": "Mint this attempt's claim token",
+          "function": {
+            "name": "map",
+            "input": {
+              "mappings": [
+                { "path": "data.token", "logic": { "random": ["uuid"] } },
+                { "path": "data.opened_at", "logic": { "now": [] } },
+                { "path": "data.dirs", "logic": ["N", "E", "S", "W", "-"] },
+                { "path": "data.finished", "logic": false }
+              ]
+            }
+          }
+        },
+        {
+          "id": "vars",
+          "name": "Halt unless this replica is configured",
+          "function": {
+            "name": "filter",
+            "input": {
+              "condition": {
+                "and": [
+                  { "!=": [{ "var": "metadata.vars.engine_digest" }, null] },
+                  { "!=": [{ "var": "metadata.vars.orion_version" }, null] },
+                  {
+                    "if": [
+                      { "==": [{ "var": "metadata.vars.mode" }, "api"] },
+                      {
+                        "and": [
+                          { "!=": [{ "var": "metadata.vars.runner_key" }, null] },
+                          { "!=": [{ "var": "metadata.vars.runner_label" }, null] }
+                        ]
+                      },
+                      {
+                        "and": [
+                          { ">": [{ "var": "metadata.vars.lease_seconds" }, 0] },
+                          { ">": [{ "var": "metadata.vars.renew_every_n_turns" }, 0] },
+                          { ">": [{ "var": "metadata.vars.turn_ms" }, 0] },
+                          { ">": [{ "var": "metadata.vars.max_turns" }, 0] },
+                          { ">": [{ "var": "metadata.vars.refusal_ceiling" }, 0] },
+                          { "!==": [{ "var": "metadata.vars.refusal_grace_secs" }, null] },
+                          { ">=": [{ "var": "metadata.vars.refusal_grace_secs" }, 0] },
+                          { "!=": [{ "var": "metadata.vars.replay_prefix" }, null] },
+                          { "!=": [{ "var": "metadata.vars.blob_endpoint" }, null] },
+                          { "!=": [{ "var": "metadata.vars.model_prefix" }, null] }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              "on_reject": "halt"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "when_reap",
+      "condition": {
+        "and": [
+          { "==": [{ "var": "temp_data.i" }, 0] },
+          { "!=": [{ "var": "metadata.vars.mode" }, "api"] }
+        ]
+      },
+      "tasks": [
+        {
+          "id": "reap",
+          "name": "Return lapsed leases to the queue",
+          "function": {
+            "name": "db_write",
+            "input": {
+              "connector": "kalam-db",
+              "query": { "$sql": "../sql/tb-match-run-reap.sql" },
+              "params": [],
+              "output": "temp_data.reaped"
+            }
+          }
+        },
+        {
+          "id": "claim",
+          "name": "Claim one queued match",
+          "function": {
+            "name": "db_write",
+            "input": {
+              "connector": "kalam-db",
+              "query": { "$sql": "../sql/tb-match-run-claim.sql" },
+              "params": [
+                { "var": "metadata.vars.engine_digest" },
+                { "var": "data.token" },
+                { "var": "metadata.vars.lease_seconds" },
+                8
+              ],
+              "output": "temp_data.claim"
+            }
+          }
+        },
+        {
+          "id": "row",
+          "name": "The row, its seats and their model ids",
+          "function": {
+            "name": "db_read",
+            "input": {
+              "connector": "kalam-db",
+              "query": { "$sql": "../sql/tb-match-run-row.sql" },
+              "params": [{ "var": "data.token" }, { "var": "metadata.vars.model_prefix" }],
+              "output": "temp_data.rows"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "auth0",
+      "name": "Exchange the runner key for a token",
+      "condition": {
+        "and": [
+          { "==": [{ "var": "temp_data.i" }, 0] },
+          { "==": [{ "var": "metadata.vars.mode" }, "api"] }
+        ]
+      },
+      "continue_on_error": true,
+      "function": { "name": "http_call", "input": { "$from": "constants.runner_token_call" } }
+    },
+    {
+      "id": "noauth",
+      "name": "No token: end the run rather than play unauthenticated",
+      "condition": {
+        "and": [
+          {
+            "and": [
+              { "==": [{ "var": "temp_data.i" }, 0] },
+              { "==": [{ "var": "metadata.vars.mode" }, "api"] }
+            ]
+          },
+          { "!": { "var": "data.tok.token" } }
+        ]
+      },
+      "terminal": true,
+      "function": {
+        "name": "map",
+        "input": { "mappings": [{ "path": "data.outcome", "logic": "no_token" }] }
+      }
+    },
+    {
+      "id": "claim_api",
+      "name": "Claim one queued match through the gate",
+      "condition": {
+        "and": [
+          { "==": [{ "var": "temp_data.i" }, 0] },
+          { "==": [{ "var": "metadata.vars.mode" }, "api"] }
+        ]
+      },
+      "continue_on_error": true,
+      "function": {
+        "name": "http_call",
+        "input": {
+          "connector": "kalam-api",
+          "method": "POST",
+          "path": "/v1/runner/claim",
+          "headers": { "Authorization": { "cat": ["Bearer ", { "var": "data.tok.token" }] } },
+          "body": { "engine_digest": { "var": "metadata.vars.engine_digest" }, "seat_count": 8 },
+          "output": "temp_data.cl"
+        }
+      }
+    },
+    {
+      "id": "open",
+      "name": "What the run rides on",
+      "condition": { "==": [{ "var": "temp_data.i" }, 0] },
+      "function": {
+        "name": "map",
+        "input": {
+          "mappings": [
+            {
+              "path": "data.claimed",
+              "logic": {
+                "if": [
+                  { "==": [{ "var": "metadata.vars.mode" }, "api"] },
+                  { "!!": { "var": "temp_data.cl.match.id" } },
+                  { ">": [{ "var": "temp_data.claim.rows_affected" }, 0] }
+                ]
+              }
+            },
+            {
+              "path": "data.row",
+              "logic": {
+                "if": [
+                  { "==": [{ "var": "metadata.vars.mode" }, "api"] },
+                  { "var": "temp_data.cl.match" },
+                  { "var": "temp_data.rows.0.row" }
+                ]
+              }
+            },
+            {
+              "path": "data.token",
+              "logic": {
+                "if": [
+                  { "==": [{ "var": "metadata.vars.mode" }, "api"] },
+                  { "var": "temp_data.cl.claim.token" },
+                  { "var": "data.token" }
+                ]
+              }
+            },
+            {
+              "path": "data.ct",
+              "logic": {
+                "if": [
+                  { "==": [{ "var": "metadata.vars.mode" }, "api"] },
+                  { "var": "temp_data.cl.contract" },
+                  {
+                    "turn_ms": { "var": "metadata.vars.turn_ms" },
+                    "max_turns": { "var": "metadata.vars.max_turns" },
+                    "model_prefix": { "var": "metadata.vars.model_prefix" },
+                    "engine_digest": { "var": "metadata.vars.engine_digest" },
+                    "replay_prefix": { "var": "metadata.vars.replay_prefix" },
+                    "renew_every_n_turns": {
+                      "max": [
+                        1,
+                        {
+                          "min": [
+                            { "var": "metadata.vars.renew_every_n_turns" },
+                            {
+                              "floor": [
+                                {
+                                  "/": [
+                                    { "*": [{ "var": "metadata.vars.lease_seconds" }, 1000] },
+                                    {
+                                      "*": [
+                                        { "+": [{ "var": "data.row.seat_count" }, 1] },
+                                        { "var": "metadata.vars.turn_ms" }
+                                      ]
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    "lease_seconds": { "var": "metadata.vars.lease_seconds" },
+                    "refusal_ceiling": { "var": "metadata.vars.refusal_ceiling" }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "idle",
+      "name": "Nothing queued for this engine: end the run",
+      "condition": {
+        "and": [
+          { "==": [{ "var": "temp_data.i" }, 0] },
+          { "!": { "var": "data.claimed" } }
+        ]
+      },
+      "terminal": true,
+      "function": {
+        "name": "map",
+        "input": { "mappings": [{ "path": "data.outcome", "logic": "idle" }] }
+      }
+    },
+    {
+      "id": "opened",
+      "name": "The seats and the refs",
+      "condition": { "==": [{ "var": "temp_data.i" }, 0] },
+      "function": {
+        "name": "map",
+        "input": {
+          "mappings": [
+            { "path": "data.seats", "logic": { "var": "data.row.seats" } },
+            {
+              "path": "data.refs",
+              "logic": {
+                "map": [
+                  { "var": "data.seats" },
+                  {
+                    "m": 0,
+                    "seat": { "var": "seat" },
+                    "model": { "var": "model" },
+                    "weights_hash": { "var": "weights_hash" },
+                    "manifest_hash": { "var": "manifest_hash" },
+                    "strike_ceiling": { "var": "strike_ceiling" },
+                    "strikes": 0,
+                    "forfeited": false,
+                    "infer_us_total": 0,
+                    "infer_us_max": 0,
+                    "infer_turns": 0
+                  }
+                ]
+              }
+            },
+            { "path": "data.deltas", "logic": [] },
+            { "path": "data.struck", "logic": 0 }
+          ]
+        }
+      }
+    },
+    {
+      "$each": { "seat": { "$from": "constants.seats" } },
+      "do": {
+        "id": "has{{seat}}",
+        "name": "Can this node serve seat {{seat}}'s model?",
+        "condition": {
+          "and": [
+            { "==": [{ "var": "temp_data.i" }, 0] },
+            { ">": [{ "var": "data.row.seat_count" }, { "$param": "seat" }] }
+          ]
+        },
+        "continue_on_error": true,
+        "function": {
+          "name": "http_call",
+          "input": {
+            "connector": "kalam-orion",
+            "method": "GET",
+            "path": {
+              "cat": [
+                "/models/",
+                { "val": ["data", "seats", { "$param": "seat" }, "model"] }
+              ]
+            },
+            "output": "temp_data.m{{seat}}"
+          }
+        }
+      }
+    },
+    {
+      "id": "barrier",
+      "name": "How many seats this node cannot play",
+      "condition": { "==": [{ "var": "temp_data.i" }, 0] },
+      "function": {
+        "name": "map",
+        "input": {
+          "mappings": [
+            {
+              "path": "temp_data.n_missing",
+              "logic": {
+                "+": [
+                  {
+                    "$each": { "seat": { "$from": "constants.seats" } },
+                    "do": {
+                      "if": [
+                        {
+                          "and": [
+                            { ">": [{ "var": "data.row.seat_count" }, { "$param": "seat" }] },
+                            { "!==": [{ "var": "temp_data.m{{seat}}.data.status" }, "active"] }
+                          ]
+                        },
+                        1,
+                        0
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "release",
+      "name": "A model this node cannot serve: back to the queue",
+      "condition": {
+        "and": [
+          {
+            "and": [
+              { "==": [{ "var": "temp_data.i" }, 0] },
+              { ">": [{ "var": "temp_data.n_missing" }, 0] }
+            ]
+          },
+          { "!=": [{ "var": "metadata.vars.mode" }, "api"] }
+        ]
+      },
+      "function": {
+        "name": "db_write",
+        "input": {
+          "connector": "kalam-db",
+          "query": { "$sql": "../sql/tb-match-run-release.sql" },
+          "params": [
+            { "var": "data.token" },
+            true,
+            { "var": "metadata.vars.refusal_ceiling" },
+            { "var": "metadata.vars.refusal_grace_secs" }
+          ],
+          "output": "temp_data.released"
+        }
+      }
+    },
+    {
+      "id": "release_api",
+      "name": "A model this node cannot serve: back to the queue",
+      "condition": {
+        "and": [
+          {
+            "and": [
+              { "==": [{ "var": "temp_data.i" }, 0] },
+              { ">": [{ "var": "temp_data.n_missing" }, 0] }
+            ]
+          },
+          { "==": [{ "var": "metadata.vars.mode" }, "api"] }
+        ]
+      },
+      "continue_on_error": true,
+      "function": {
+        "name": "http_call",
+        "input": {
+          "connector": "kalam-api",
+          "method": "POST",
+          "path": { "cat": ["/v1/runner/matches/", { "var": "data.row.id" }, "/release"] },
+          "headers": { "Authorization": { "cat": ["Bearer ", { "var": "data.tok.token" }] } },
+          "body": { "claim_token": { "var": "data.token" } },
+          "output": "temp_data.released_api"
+        }
+      }
+    },
+    {
+      "id": "unready",
+      "name": "End the run: the roster has not caught up",
+      "condition": {
+        "and": [
+          { "==": [{ "var": "temp_data.i" }, 0] },
+          { ">": [{ "var": "temp_data.n_missing" }, 0] }
+        ]
+      },
+      "terminal": true,
+      "function": {
+        "name": "map",
+        "input": { "mappings": [{ "path": "data.outcome", "logic": "model_unavailable" }] }
+      }
+    },
+    {
+      "id": "start",
+      "name": "Claimed becomes running",
+      "condition": {
+        "and": [
+          { "==": [{ "var": "temp_data.i" }, 0] },
+          { "!=": [{ "var": "metadata.vars.mode" }, "api"] }
+        ]
+      },
+      "function": {
+        "name": "db_write",
+        "input": {
+          "connector": "kalam-db",
+          "query": { "$sql": "../sql/tb-match-run-start.sql" },
+          "params": [{ "var": "data.token" }],
+          "output": "temp_data.started"
+        }
+      }
+    },
+    {
+      "id": "start_api",
+      "name": "Claimed becomes running",
+      "condition": {
+        "and": [
+          { "==": [{ "var": "temp_data.i" }, 0] },
+          { "==": [{ "var": "metadata.vars.mode" }, "api"] }
+        ]
+      },
+      "continue_on_error": true,
+      "function": {
+        "name": "http_call",
+        "input": {
+          "connector": "kalam-api",
+          "method": "POST",
+          "path": { "cat": ["/v1/runner/matches/", { "var": "data.row.id" }, "/start"] },
+          "headers": { "Authorization": { "cat": ["Bearer ", { "var": "data.tok.token" }] } },
+          "body": { "claim_token": { "var": "data.token" } },
+          "output": "temp_data.started_api"
+        }
+      }
+    },
+    {
+      "id": "when_started",
+      "condition": { "==": [{ "var": "temp_data.i" }, 0] },
+      "tasks": [
+        {
+          "id": "started",
+          "name": "Halt if the start wrote nothing: the token is stale",
+          "function": {
+            "name": "filter",
+            "input": {
+              "condition": {
+                "if": [
+                  { "==": [{ "var": "metadata.vars.mode" }, "api"] },
+                  { "===": [{ "var": "temp_data.started_api.started" }, true] },
+                  { ">": [{ "var": "temp_data.started.rows_affected" }, 0] }
+                ]
+              },
+              "on_reject": "halt"
+            }
+          }
+        },
+        {
+          "id": "world",
+          "name": "Build the world",
+          "function": {
+            "name": "tb.ants.worldgen",
+            "input": {
+              "seeds": [{ "var": "data.row.seed" }],
+              "map": { "var": "data.row.map" },
+              "players": { "var": "data.row.seat_count" },
+              "max_turns": { "var": "data.ct.max_turns" },
+              "output": "temp_data.w0"
+            }
+          }
+        },
+        {
+          "id": "init",
+          "name": "Open the match",
+          "function": {
+            "name": "map",
+            "input": {
+              "mappings": [{ "path": "data.state", "logic": { "var": "temp_data.w0.wave_state" } }]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "when_observe",
+      "condition": { "!": { "var": "data.finished" } },
+      "tasks": [
+        {
+          "id": "observe",
+          "name": "Every live seat's view",
+          "function": {
+            "name": "tb.ants.observe",
+            "input": {
+              "wave_state": { "var": "data.state" },
+              "refs": { "var": "data.refs" },
+              "output": "temp_data.obs"
+            }
+          }
+        },
+        {
+          "id": "turn",
+          "name": "This turn's views, and the board they are on",
+          "function": {
+            "name": "map",
+            "input": {
+              "mappings": [
+                {
+                  "path": "temp_data.n_live",
+                  "logic": { "length": [{ "var": "temp_data.obs.views" }] }
+                },
+                {
+                  "path": "temp_data.v0",
+                  "logic": {
+                    "reduce": [
+                      { "var": "temp_data.obs.views" },
+                      {
+                        "if": [
+                          { "===": [{ "var": "current.ref.seat" }, 0] },
+                          { "var": "current.view" },
+                          { "var": "accumulator" }
+                        ]
+                      },
+                      null
+                    ]
+                  }
+                },
+                {
+                  "path": "temp_data.v1",
+                  "logic": {
+                    "reduce": [
+                      { "var": "temp_data.obs.views" },
+                      {
+                        "if": [
+                          { "===": [{ "var": "current.ref.seat" }, 1] },
+                          { "var": "current.view" },
+                          { "var": "accumulator" }
+                        ]
+                      },
+                      null
+                    ]
+                  }
+                },
+                {
+                  "path": "temp_data.v2",
+                  "logic": {
+                    "reduce": [
+                      { "var": "temp_data.obs.views" },
+                      {
+                        "if": [
+                          { "===": [{ "var": "current.ref.seat" }, 2] },
+                          { "var": "current.view" },
+                          { "var": "accumulator" }
+                        ]
+                      },
+                      null
+                    ]
+                  }
+                },
+                {
+                  "path": "temp_data.v3",
+                  "logic": {
+                    "reduce": [
+                      { "var": "temp_data.obs.views" },
+                      {
+                        "if": [
+                          { "===": [{ "var": "current.ref.seat" }, 3] },
+                          { "var": "current.view" },
+                          { "var": "accumulator" }
+                        ]
+                      },
+                      null
+                    ]
+                  }
+                },
+                {
+                  "path": "temp_data.v4",
+                  "logic": {
+                    "reduce": [
+                      { "var": "temp_data.obs.views" },
+                      {
+                        "if": [
+                          { "===": [{ "var": "current.ref.seat" }, 4] },
+                          { "var": "current.view" },
+                          { "var": "accumulator" }
+                        ]
+                      },
+                      null
+                    ]
+                  }
+                },
+                {
+                  "path": "temp_data.v5",
+                  "logic": {
+                    "reduce": [
+                      { "var": "temp_data.obs.views" },
+                      {
+                        "if": [
+                          { "===": [{ "var": "current.ref.seat" }, 5] },
+                          { "var": "current.view" },
+                          { "var": "accumulator" }
+                        ]
+                      },
+                      null
+                    ]
+                  }
+                },
+                {
+                  "path": "temp_data.v6",
+                  "logic": {
+                    "reduce": [
+                      { "var": "temp_data.obs.views" },
+                      {
+                        "if": [
+                          { "===": [{ "var": "current.ref.seat" }, 6] },
+                          { "var": "current.view" },
+                          { "var": "accumulator" }
+                        ]
+                      },
+                      null
+                    ]
+                  }
+                },
+                {
+                  "path": "temp_data.v7",
+                  "logic": {
+                    "reduce": [
+                      { "var": "temp_data.obs.views" },
+                      {
+                        "if": [
+                          { "===": [{ "var": "current.ref.seat" }, 7] },
+                          { "var": "current.view" },
+                          { "var": "accumulator" }
+                        ]
+                      },
+                      null
+                    ]
+                  }
+                },
+                { "path": "data.f0", "logic": { "val": ["data", "refs", 0, "forfeited"] } },
+                { "path": "data.f1", "logic": { "val": ["data", "refs", 1, "forfeited"] } },
+                { "path": "data.f2", "logic": { "val": ["data", "refs", 2, "forfeited"] } },
+                { "path": "data.f3", "logic": { "val": ["data", "refs", 3, "forfeited"] } },
+                { "path": "data.f4", "logic": { "val": ["data", "refs", 4, "forfeited"] } },
+                { "path": "data.f5", "logic": { "val": ["data", "refs", 5, "forfeited"] } },
+                { "path": "data.f6", "logic": { "val": ["data", "refs", 6, "forfeited"] } },
+                { "path": "data.f7", "logic": { "val": ["data", "refs", 7, "forfeited"] } },
+                {
+                  "path": "temp_data.w",
+                  "logic": { "val": ["temp_data", "obs", "views", 0, "view", "size", 1] }
+                },
+                {
+                  "path": "temp_data.cells",
+                  "logic": {
+                    "*": [
+                      { "val": ["temp_data", "obs", "views", 0, "view", "size", 0] },
+                      { "val": ["temp_data", "obs", "views", 0, "view", "size", 1] }
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "$each": { "seat": { "$from": "constants.seats" } },
+      "do": {
+        "id": "infer{{seat}}",
+        "name": "Seat {{seat}}'s move",
+        "condition": {
+          "and": [
+            { ">": [{ "var": "temp_data.n_live" }, 0] },
+            { ">": [{ "var": "data.row.seat_count" }, { "$param": "seat" }] },
+            { "!": { "var": "data.f{{seat}}" } },
+            { "!!": [{ "var": "temp_data.v{{seat}}.mine" }] }
+          ]
+        },
+        "continue_on_error": true,
+        "function": {
+          "name": "model_infer",
+          "input": {
+            "model": { "val": ["data", "seats", { "$param": "seat" }, "model"] },
+            "input": { "var": "temp_data.v{{seat}}" },
+            "output": "temp_data.p{{seat}}",
+            "raw": true,
+            "timeout_ms": { "var": "data.ct.turn_ms" },
+            "stats_output": "temp_data.s{{seat}}"
+          }
+        }
+      }
+    },
+    {
+      "id": "acts",
+      "name": "Decode each head, accumulate strikes and cost",
+      "condition": { ">": [{ "var": "temp_data.n_live" }, 0] },
+      "function": {
+        "name": "map",
+        "input": {
+          "mappings": [
+            {
+              "path": "temp_data.a0",
+              "logic": {
+                "if": [
+                  {
+                    "!": {
+                      "and": [
+                        { ">": [{ "var": "temp_data.n_live" }, 0] },
+                        { ">": [{ "var": "data.row.seat_count" }, 0] },
+                        { "!": { "var": "data.f0" } },
+                        { "!!": [{ "var": "temp_data.v0.mine" }] }
+                      ]
+                    }
+                  },
+                  null,
+                  {
+                    "map": [
+                      {
+                        "reduce": [
+                          {
+                            "if": [
+                              { "var": "temp_data.v0.mine" },
+                              { "var": "temp_data.v0.mine" },
+                              []
+                            ]
+                          },
+                          {
+                            "merge": [
+                              { "var": "accumulator" },
+                              [
+                                {
+                                  "+": [
+                                    {
+                                      "*": [
+                                        { "val": [[1], "temp_data", "w"] },
+                                        { "var": "current.0" }
+                                      ]
+                                    },
+                                    { "var": "current.1" }
+                                  ]
+                                }
+                              ]
+                            ]
+                          },
+                          []
+                        ]
+                      },
+                      { "var": "" }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "path": "temp_data.a1",
+              "logic": {
+                "if": [
+                  {
+                    "!": {
+                      "and": [
+                        { ">": [{ "var": "temp_data.n_live" }, 0] },
+                        { ">": [{ "var": "data.row.seat_count" }, 1] },
+                        { "!": { "var": "data.f1" } },
+                        { "!!": [{ "var": "temp_data.v1.mine" }] }
+                      ]
+                    }
+                  },
+                  null,
+                  {
+                    "map": [
+                      {
+                        "reduce": [
+                          {
+                            "if": [
+                              { "var": "temp_data.v1.mine" },
+                              { "var": "temp_data.v1.mine" },
+                              []
+                            ]
+                          },
+                          {
+                            "merge": [
+                              { "var": "accumulator" },
+                              [
+                                {
+                                  "+": [
+                                    {
+                                      "*": [
+                                        { "val": [[1], "temp_data", "w"] },
+                                        { "var": "current.0" }
+                                      ]
+                                    },
+                                    { "var": "current.1" }
+                                  ]
+                                }
+                              ]
+                            ]
+                          },
+                          []
+                        ]
+                      },
+                      { "var": "" }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "path": "temp_data.a2",
+              "logic": {
+                "if": [
+                  {
+                    "!": {
+                      "and": [
+                        { ">": [{ "var": "temp_data.n_live" }, 0] },
+                        { ">": [{ "var": "data.row.seat_count" }, 2] },
+                        { "!": { "var": "data.f2" } },
+                        { "!!": [{ "var": "temp_data.v2.mine" }] }
+                      ]
+                    }
+                  },
+                  null,
+                  {
+                    "map": [
+                      {
+                        "reduce": [
+                          {
+                            "if": [
+                              { "var": "temp_data.v2.mine" },
+                              { "var": "temp_data.v2.mine" },
+                              []
+                            ]
+                          },
+                          {
+                            "merge": [
+                              { "var": "accumulator" },
+                              [
+                                {
+                                  "+": [
+                                    {
+                                      "*": [
+                                        { "val": [[1], "temp_data", "w"] },
+                                        { "var": "current.0" }
+                                      ]
+                                    },
+                                    { "var": "current.1" }
+                                  ]
+                                }
+                              ]
+                            ]
+                          },
+                          []
+                        ]
+                      },
+                      { "var": "" }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "path": "temp_data.a3",
+              "logic": {
+                "if": [
+                  {
+                    "!": {
+                      "and": [
+                        { ">": [{ "var": "temp_data.n_live" }, 0] },
+                        { ">": [{ "var": "data.row.seat_count" }, 3] },
+                        { "!": { "var": "data.f3" } },
+                        { "!!": [{ "var": "temp_data.v3.mine" }] }
+                      ]
+                    }
+                  },
+                  null,
+                  {
+                    "map": [
+                      {
+                        "reduce": [
+                          {
+                            "if": [
+                              { "var": "temp_data.v3.mine" },
+                              { "var": "temp_data.v3.mine" },
+                              []
+                            ]
+                          },
+                          {
+                            "merge": [
+                              { "var": "accumulator" },
+                              [
+                                {
+                                  "+": [
+                                    {
+                                      "*": [
+                                        { "val": [[1], "temp_data", "w"] },
+                                        { "var": "current.0" }
+                                      ]
+                                    },
+                                    { "var": "current.1" }
+                                  ]
+                                }
+                              ]
+                            ]
+                          },
+                          []
+                        ]
+                      },
+                      { "var": "" }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "path": "temp_data.a4",
+              "logic": {
+                "if": [
+                  {
+                    "!": {
+                      "and": [
+                        { ">": [{ "var": "temp_data.n_live" }, 0] },
+                        { ">": [{ "var": "data.row.seat_count" }, 4] },
+                        { "!": { "var": "data.f4" } },
+                        { "!!": [{ "var": "temp_data.v4.mine" }] }
+                      ]
+                    }
+                  },
+                  null,
+                  {
+                    "map": [
+                      {
+                        "reduce": [
+                          {
+                            "if": [
+                              { "var": "temp_data.v4.mine" },
+                              { "var": "temp_data.v4.mine" },
+                              []
+                            ]
+                          },
+                          {
+                            "merge": [
+                              { "var": "accumulator" },
+                              [
+                                {
+                                  "+": [
+                                    {
+                                      "*": [
+                                        { "val": [[1], "temp_data", "w"] },
+                                        { "var": "current.0" }
+                                      ]
+                                    },
+                                    { "var": "current.1" }
+                                  ]
+                                }
+                              ]
+                            ]
+                          },
+                          []
+                        ]
+                      },
+                      { "var": "" }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "path": "temp_data.a5",
+              "logic": {
+                "if": [
+                  {
+                    "!": {
+                      "and": [
+                        { ">": [{ "var": "temp_data.n_live" }, 0] },
+                        { ">": [{ "var": "data.row.seat_count" }, 5] },
+                        { "!": { "var": "data.f5" } },
+                        { "!!": [{ "var": "temp_data.v5.mine" }] }
+                      ]
+                    }
+                  },
+                  null,
+                  {
+                    "map": [
+                      {
+                        "reduce": [
+                          {
+                            "if": [
+                              { "var": "temp_data.v5.mine" },
+                              { "var": "temp_data.v5.mine" },
+                              []
+                            ]
+                          },
+                          {
+                            "merge": [
+                              { "var": "accumulator" },
+                              [
+                                {
+                                  "+": [
+                                    {
+                                      "*": [
+                                        { "val": [[1], "temp_data", "w"] },
+                                        { "var": "current.0" }
+                                      ]
+                                    },
+                                    { "var": "current.1" }
+                                  ]
+                                }
+                              ]
+                            ]
+                          },
+                          []
+                        ]
+                      },
+                      { "var": "" }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "path": "temp_data.a6",
+              "logic": {
+                "if": [
+                  {
+                    "!": {
+                      "and": [
+                        { ">": [{ "var": "temp_data.n_live" }, 0] },
+                        { ">": [{ "var": "data.row.seat_count" }, 6] },
+                        { "!": { "var": "data.f6" } },
+                        { "!!": [{ "var": "temp_data.v6.mine" }] }
+                      ]
+                    }
+                  },
+                  null,
+                  {
+                    "map": [
+                      {
+                        "reduce": [
+                          {
+                            "if": [
+                              { "var": "temp_data.v6.mine" },
+                              { "var": "temp_data.v6.mine" },
+                              []
+                            ]
+                          },
+                          {
+                            "merge": [
+                              { "var": "accumulator" },
+                              [
+                                {
+                                  "+": [
+                                    {
+                                      "*": [
+                                        { "val": [[1], "temp_data", "w"] },
+                                        { "var": "current.0" }
+                                      ]
+                                    },
+                                    { "var": "current.1" }
+                                  ]
+                                }
+                              ]
+                            ]
+                          },
+                          []
+                        ]
+                      },
+                      { "var": "" }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "path": "temp_data.a7",
+              "logic": {
+                "if": [
+                  {
+                    "!": {
+                      "and": [
+                        { ">": [{ "var": "temp_data.n_live" }, 0] },
+                        { ">": [{ "var": "data.row.seat_count" }, 7] },
+                        { "!": { "var": "data.f7" } },
+                        { "!!": [{ "var": "temp_data.v7.mine" }] }
+                      ]
+                    }
+                  },
+                  null,
+                  {
+                    "map": [
+                      {
+                        "reduce": [
+                          {
+                            "if": [
+                              { "var": "temp_data.v7.mine" },
+                              { "var": "temp_data.v7.mine" },
+                              []
+                            ]
+                          },
+                          {
+                            "merge": [
+                              { "var": "accumulator" },
+                              [
+                                {
+                                  "+": [
+                                    {
+                                      "*": [
+                                        { "val": [[1], "temp_data", "w"] },
+                                        { "var": "current.0" }
+                                      ]
+                                    },
+                                    { "var": "current.1" }
+                                  ]
+                                }
+                              ]
+                            ]
+                          },
+                          []
+                        ]
+                      },
+                      { "var": "" }
+                    ]
+                  }
+                ]
+              }
+            },
+            { "path": "temp_data.idx", "logic": false }
+          ]
+        }
+      }
+    },
+    {
+      "$each": { "seat": { "$from": "constants.seats" } },
+      "do": {
+        "id": "act{{seat}}",
+        "name": "Seat {{seat}}: the head, decoded",
+        "condition": {
+          "and": [
+            { ">": [{ "var": "temp_data.n_live" }, 0] },
+            { ">": [{ "var": "data.row.seat_count" }, { "$param": "seat" }] },
+            { "!": { "var": "data.f{{seat}}" } },
+            { "!!": [{ "var": "temp_data.v{{seat}}.mine" }] }
+          ]
+        },
+        "function": {
+          "name": "map",
+          "input": {
+            "mappings": [
+              { "path": "temp_data.idx", "logic": { "var": "temp_data.a{{seat}}" } },
+              {
+                "path": "temp_data.act{{seat}}",
+                "logic": {
+                  "if": [
+                    { "!": { "var": "temp_data.p{{seat}}.policy" } },
+                    null,
+                    {
+                      "map": [
+                        {
+                          "argmax": [
+                            {
+                              "if": [
+                                {
+                                  "==": [
+                                    { "length": [{ "shape": [{ "var": "temp_data.p{{seat}}.policy" }] }] },
+                                    4
+                                  ]
+                                },
+                                {
+                                  "transpose": [
+                                    {
+                                      "gather": [
+                                        {
+                                          "reshape": [
+                                            { "var": "temp_data.p{{seat}}.policy" },
+                                            [5, { "var": "temp_data.cells" }]
+                                          ]
+                                        },
+                                        { "var": "temp_data.idx" },
+                                        1
+                                      ]
+                                    },
+                                    [1, 0]
+                                  ]
+                                },
+                                { "var": "temp_data.p{{seat}}.policy" }
+                              ]
+                            },
+                            1
+                          ]
+                        },
+                        { "val": [[1], "data", "dirs", { "var": "" }] }
+                      ]
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "when_moves",
+      "condition": { ">": [{ "var": "temp_data.n_live" }, 0] },
+      "tasks": [
+        {
+          "id": "moves",
+          "name": "The turn's actions, and what they cost",
+          "function": {
+            "name": "map",
+            "input": {
+              "mappings": [
+                {
+                  "path": "temp_data.acts",
+                  "logic": {
+                    "reduce": [
+                      [
+                        {
+                          "$each": { "seat": { "$from": "constants.seats" } },
+                          "do": {
+                            "seat": { "$param": "seat" },
+                            "action": { "var": "temp_data.act{{seat}}" },
+                            "live": {
+                              "and": [
+                                { ">": [{ "var": "temp_data.n_live" }, 0] },
+                                { ">": [{ "var": "data.row.seat_count" }, { "$param": "seat" }] },
+                                { "!": { "var": "data.f{{seat}}" } },
+                                { "!!": [{ "var": "temp_data.v{{seat}}.mine" }] }
+                              ]
+                            }
+                          }
+                        }
+                      ],
+                      {
+                        "if": [
+                          { "and": [{ "var": "current.live" }, { "var": "current.action" }] },
+                          {
+                            "merge": [
+                              { "var": "accumulator" },
+                              [
+                                {
+                                  "m": 0,
+                                  "seat": { "var": "current.seat" },
+                                  "action": { "var": "current.action" }
+                                }
+                              ]
+                            ]
+                          },
+                          { "var": "accumulator" }
+                        ]
+                      },
+                      []
+                    ]
+                  }
+                },
+                {
+                  "path": "temp_data.miss",
+                  "logic": [
+                    {
+                      "$each": { "seat": { "$from": "constants.seats" } },
+                      "do": {
+                        "if": [
+                          {
+                            "and": [
+                              {
+                                "and": [
+                                  { ">": [{ "var": "temp_data.n_live" }, 0] },
+                                  { ">": [{ "var": "data.row.seat_count" }, { "$param": "seat" }] },
+                                  { "!": { "var": "data.f{{seat}}" } },
+                                  { "!!": [{ "var": "temp_data.v{{seat}}.mine" }] }
+                                ]
+                              },
+                              { "!": { "var": "temp_data.act{{seat}}" } }
+                            ]
+                          },
+                          1,
+                          0
+                        ]
+                      }
+                    }
+                  ]
+                },
+                {
+                  "path": "temp_data.cost",
+                  "logic": [
+                    {
+                      "$each": { "seat": { "$from": "constants.seats" } },
+                      "do": {
+                        "floor": [
+                          {
+                            "*": [
+                              1000,
+                              { "??": [{ "var": "temp_data.s{{seat}}.inference_ms" }, 0] }
+                            ]
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                },
+                {
+                  "path": "temp_data.asked",
+                  "logic": [
+                    {
+                      "$each": { "seat": { "$from": "constants.seats" } },
+                      "do": {
+                        "if": [
+                          {
+                            "and": [
+                              { ">": [{ "var": "temp_data.n_live" }, 0] },
+                              { ">": [{ "var": "data.row.seat_count" }, { "$param": "seat" }] },
+                              { "!": { "var": "data.f{{seat}}" } },
+                              { "!!": [{ "var": "temp_data.v{{seat}}.mine" }] }
+                            ]
+                          },
+                          1,
+                          0
+                        ]
+                      }
+                    }
+                  ]
+                },
+                {
+                  "path": "temp_data.nr",
+                  "logic": {
+                    "reduce": [
+                      { "var": "data.refs" },
+                      {
+                        "miss": { "var": "accumulator.miss" },
+                        "cost": { "var": "accumulator.cost" },
+                        "asked": { "var": "accumulator.asked" },
+                        "items": {
+                          "merge": [
+                            { "var": "accumulator.items" },
+                            [
+                              {
+                                "m": 0,
+                                "seat": { "var": "current.seat" },
+                                "model": { "var": "current.model" },
+                                "weights_hash": { "var": "current.weights_hash" },
+                                "manifest_hash": { "var": "current.manifest_hash" },
+                                "strike_ceiling": { "var": "current.strike_ceiling" },
+                                "strikes": {
+                                  "+": [
+                                    { "var": "current.strikes" },
+                                    {
+                                      "val": ["accumulator", "miss", { "val": ["current", "seat"] }]
+                                    }
+                                  ]
+                                },
+                                "forfeited": {
+                                  "or": [
+                                    { "var": "current.forfeited" },
+                                    {
+                                      ">=": [
+                                        {
+                                          "+": [
+                                            { "var": "current.strikes" },
+                                            {
+                                              "val": [
+                                                "accumulator",
+                                                "miss",
+                                                { "val": ["current", "seat"] }
+                                              ]
+                                            }
+                                          ]
+                                        },
+                                        { "var": "current.strike_ceiling" }
+                                      ]
+                                    }
+                                  ]
+                                },
+                                "infer_us_total": {
+                                  "+": [
+                                    { "var": "current.infer_us_total" },
+                                    {
+                                      "val": ["accumulator", "cost", { "val": ["current", "seat"] }]
+                                    }
+                                  ]
+                                },
+                                "infer_us_max": {
+                                  "max": [
+                                    { "var": "current.infer_us_max" },
+                                    {
+                                      "val": ["accumulator", "cost", { "val": ["current", "seat"] }]
+                                    }
+                                  ]
+                                },
+                                "infer_turns": {
+                                  "+": [
+                                    { "var": "current.infer_turns" },
+                                    {
+                                      "val": [
+                                        "accumulator",
+                                        "asked",
+                                        { "val": ["current", "seat"] }
+                                      ]
+                                    }
+                                  ]
+                                }
+                              }
+                            ]
+                          ]
+                        }
+                      },
+                      {
+                        "miss": { "var": "temp_data.miss" },
+                        "cost": { "var": "temp_data.cost" },
+                        "asked": { "var": "temp_data.asked" },
+                        "items": []
+                      }
+                    ]
+                  }
+                },
+                { "path": "data.refs", "logic": { "var": "temp_data.nr.items" } },
+                {
+                  "path": "data.struck",
+                  "logic": {
+                    "+": [
+                      { "var": "data.struck" },
+                      {
+                        "reduce": [
+                          { "var": "temp_data.miss" },
+                          { "+": [{ "var": "accumulator" }, { "var": "current" }] },
+                          0
+                        ]
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "id": "step",
+          "name": "Advance the match by one turn",
+          "function": {
+            "name": "tb.ants.step",
+            "input": {
+              "wave_state": { "var": "data.state" },
+              "actions": { "var": "temp_data.acts" },
+              "output": "temp_data.st"
+            }
+          }
+        },
+        {
+          "id": "carry",
+          "name": "Carry the state and the replay stream",
+          "function": {
+            "name": "map",
+            "input": {
+              "mappings": [
+                { "path": "data.state", "logic": { "var": "temp_data.st.wave_state" } },
+                {
+                  "path": "data.deltas",
+                  "logic": {
+                    "merge": [{ "var": "data.deltas" }, { "var": "temp_data.st.replay_delta" }]
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "renew",
+      "name": "Extend the lease",
+      "condition": {
+        "and": [
+          {
+            "and": [
+              { ">": [{ "var": "temp_data.n_live" }, 0] },
+              { ">": [{ "var": "temp_data.i" }, 0] },
+              {
+                "==": [
+                  { "%": [{ "var": "temp_data.i" }, { "var": "data.ct.renew_every_n_turns" }] },
+                  0
+                ]
+              }
+            ]
+          },
+          { "!=": [{ "var": "metadata.vars.mode" }, "api"] }
+        ]
+      },
+      "function": {
+        "name": "db_write",
+        "input": {
+          "connector": "kalam-db",
+          "query": { "$sql": "../sql/tb-match-run-renew.sql" },
+          "params": [{ "var": "data.token" }, { "var": "metadata.vars.lease_seconds" }],
+          "output": "temp_data.renewed"
+        }
+      }
+    },
+    {
+      "id": "when_reauth",
+      "condition": {
+        "and": [
+          {
+            "and": [
+              { ">": [{ "var": "temp_data.n_live" }, 0] },
+              { ">": [{ "var": "temp_data.i" }, 0] },
+              {
+                "==": [
+                  { "%": [{ "var": "temp_data.i" }, { "var": "data.ct.renew_every_n_turns" }] },
+                  0
+                ]
+              }
+            ]
+          },
+          { "==": [{ "var": "metadata.vars.mode" }, "api"] }
+        ]
+      },
+      "tasks": [
+        {
+          "id": "reauth",
+          "name": "Refresh the runner token",
+          "continue_on_error": true,
+          "function": { "name": "http_call", "input": { "$from": "constants.runner_token_call" } }
+        },
+        {
+          "id": "renew_api",
+          "name": "Extend the lease",
+          "continue_on_error": true,
+          "function": {
+            "name": "http_call",
+            "input": {
+              "connector": "kalam-api",
+              "method": "POST",
+              "path": { "cat": ["/v1/runner/matches/", { "var": "data.row.id" }, "/renew"] },
+              "headers": { "Authorization": { "cat": ["Bearer ", { "var": "data.tok.token" }] } },
+              "body": { "claim_token": { "var": "data.token" } },
+              "output": "temp_data.renewed_api"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "lost",
+      "name": "Halt: the lease was reaped under us",
+      "condition": {
+        "and": [
+          {
+            "and": [
+              { ">": [{ "var": "temp_data.n_live" }, 0] },
+              { ">": [{ "var": "temp_data.i" }, 0] },
+              {
+                "==": [
+                  { "%": [{ "var": "temp_data.i" }, { "var": "data.ct.renew_every_n_turns" }] },
+                  0
+                ]
+              }
+            ]
+          },
+          {
+            "or": [
+              {
+                "and": [
+                  { "!=": [{ "var": "metadata.vars.mode" }, "api"] },
+                  { "!": { ">": [{ "var": "temp_data.renewed.rows_affected" }, 0] } }
+                ]
+              },
+              {
+                "and": [
+                  { "==": [{ "var": "metadata.vars.mode" }, "api"] },
+                  { "===": [{ "var": "temp_data.renewed_api.applied" }, false] }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "terminal": true,
+      "function": {
+        "name": "map",
+        "input": { "mappings": [{ "path": "data.outcome", "logic": "lease_lost" }] }
+      }
+    },
+    {
+      "id": "when_results",
+      "condition": {
+        "and": [
+          { "==": [{ "var": "temp_data.n_live" }, 0] },
+          { "!": { "var": "data.finished" } }
+        ]
+      },
+      "tasks": [
+        {
+          "id": "results",
+          "name": "Ranks, scores and an end reason",
+          "function": {
+            "name": "tb.ants.finish",
+            "input": { "wave_state": { "var": "data.state" }, "output": "temp_data.fin" }
+          }
+        },
+        {
+          "id": "pick",
+          "name": "The result, one element per seat",
+          "function": {
+            "name": "map",
+            "input": {
+              "mappings": [
+                { "path": "temp_data.res", "logic": { "val": ["temp_data", "fin", "results", 0] } },
+                {
+                  "path": "temp_data.seatrows",
+                  "logic": {
+                    "reduce": [
+                      { "var": "data.refs" },
+                      {
+                        "r": { "var": "accumulator.r" },
+                        "n": { "var": "accumulator.n" },
+                        "items": {
+                          "merge": [
+                            { "var": "accumulator.items" },
+                            [
+                              {
+                                "seat": { "var": "current.seat" },
+                                "rank": {
+                                  "+": [
+                                    {
+                                      "val": [
+                                        "accumulator",
+                                        "r",
+                                        "ranks",
+                                        { "val": ["current", "seat"] }
+                                      ]
+                                    },
+                                    {
+                                      "if": [
+                                        { "var": "current.forfeited" },
+                                        { "var": "accumulator.n" },
+                                        0
+                                      ]
+                                    }
+                                  ]
+                                },
+                                "score": {
+                                  "val": [
+                                    "accumulator",
+                                    "r",
+                                    "scores",
+                                    { "val": ["current", "seat"] }
+                                  ]
+                                },
+                                "strikes": { "var": "current.strikes" },
+                                "infer_us_total": { "var": "current.infer_us_total" },
+                                "infer_us_max": { "var": "current.infer_us_max" },
+                                "infer_turns": { "var": "current.infer_turns" }
+                              }
+                            ]
+                          ]
+                        }
+                      },
+                      {
+                        "r": { "var": "temp_data.res" },
+                        "n": { "var": "data.row.seat_count" },
+                        "items": []
+                      }
+                    ]
+                  }
+                },
+                {
+                  "path": "temp_data.key",
+                  "logic": {
+                    "cat": [
+                      { "var": "data.ct.replay_prefix" },
+                      "/",
+                      { "var": "data.row.id" },
+                      "/",
+                      { "var": "data.token" },
+                      ".json"
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "presign",
+      "name": "Sign a PUT for this attempt's replay",
+      "condition": {
+        "and": [
+          {
+            "and": [
+              { "==": [{ "var": "temp_data.n_live" }, 0] },
+              { "!": { "var": "data.finished" } }
+            ]
+          },
+          { "!=": [{ "var": "metadata.vars.mode" }, "api"] }
+        ]
+      },
+      "function": {
+        "name": "storage_presign",
+        "input": {
+          "connector": "kalam-blobs",
+          "method": "PUT",
+          "key": { "var": "temp_data.key" },
+          "expires_in": "15m",
+          "output": "temp_data.signed"
+        }
+      }
+    },
+    {
+      "id": "presign_api",
+      "name": "Ask the gate to sign this attempt's replay PUT",
+      "condition": {
+        "and": [
+          {
+            "and": [
+              { "==": [{ "var": "temp_data.n_live" }, 0] },
+              { "!": { "var": "data.finished" } }
+            ]
+          },
+          { "==": [{ "var": "metadata.vars.mode" }, "api"] }
+        ]
+      },
+      "continue_on_error": true,
+      "function": {
+        "name": "http_call",
+        "input": {
+          "connector": "kalam-api",
+          "method": "POST",
+          "path": { "cat": ["/v1/runner/matches/", { "var": "data.row.id" }, "/replay-url"] },
+          "headers": { "Authorization": { "cat": ["Bearer ", { "var": "data.tok.token" }] } },
+          "body": { "claim_token": { "var": "data.token" } },
+          "output": "temp_data.signed_api"
+        }
+      }
+    },
+    {
+      "id": "when_signed",
+      "condition": {
+        "and": [
+          { "==": [{ "var": "temp_data.n_live" }, 0] },
+          { "!": { "var": "data.finished" } }
+        ]
+      },
+      "tasks": [
+        {
+          "id": "signed",
+          "name": "One URL and one endpoint, whoever signed it",
+          "function": {
+            "name": "map",
+            "input": {
+              "mappings": [
+                {
+                  "path": "temp_data.url",
+                  "logic": {
+                    "if": [
+                      { "==": [{ "var": "metadata.vars.mode" }, "api"] },
+                      { "var": "temp_data.signed_api.url" },
+                      { "var": "temp_data.signed" }
+                    ]
+                  }
+                },
+                {
+                  "path": "temp_data.ep",
+                  "logic": {
+                    "if": [
+                      { "==": [{ "var": "metadata.vars.mode" }, "api"] },
+                      { "var": "temp_data.signed_api.endpoint" },
+                      { "var": "metadata.vars.blob_endpoint" }
+                    ]
+                  }
+                },
+                {
+                  "path": "temp_data.key",
+                  "logic": {
+                    "if": [
+                      { "==": [{ "var": "metadata.vars.mode" }, "api"] },
+                      { "var": "temp_data.signed_api.key" },
+                      { "var": "temp_data.key" }
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "id": "put",
+          "name": "Write the replay envelope",
+          "function": {
+            "name": "http_call",
+            "input": {
+              "connector": "kalam-blobs-put",
+              "method": "PUT",
+              "path": {
+                "substr": [{ "var": "temp_data.url" }, { "length": [{ "var": "temp_data.ep" }] }]
+              },
+              "body": {
+                "match_id": { "var": "data.row.id" },
+                "attempt_token": { "var": "data.token" },
+                "seed": { "var": "data.row.seed" },
+                "map_id": { "var": "temp_data.res.map_id" },
+                "map": { "var": "temp_data.res.map" },
+                "seats": { "var": "data.refs" },
+                "max_turns": { "var": "data.ct.max_turns" },
+                "strike_ceiling": { "var": "data.row.strike_ceiling" },
+                "engine_digest": { "var": "metadata.vars.engine_digest" },
+                "orion_version": { "var": "metadata.vars.orion_version" },
+                "engine_ranks": { "var": "temp_data.res.ranks" },
+                "scores": { "var": "temp_data.res.scores" },
+                "reason": { "var": "temp_data.res.reason" },
+                "turns": { "var": "temp_data.res.turns" },
+                "deltas": { "var": "data.deltas" }
+              },
+              "output": "temp_data.putres",
+              "response_format": "text"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "finish",
+      "name": "Finish the row -- one statement, on the token",
+      "condition": {
+        "and": [
+          {
+            "and": [
+              { "==": [{ "var": "temp_data.n_live" }, 0] },
+              { "!": { "var": "data.finished" } }
+            ]
+          },
+          { "!=": [{ "var": "metadata.vars.mode" }, "api"] }
+        ]
+      },
+      "function": {
+        "name": "db_write",
+        "input": {
+          "connector": "kalam-db",
+          "query": { "$sql": "../sql/tb-match-run-finish.sql" },
+          "params": [
+            { "var": "data.token" },
+            { "var": "data.row.id" },
+            { "var": "temp_data.seatrows.items" },
+            { "var": "temp_data.res.reason" },
+            { "var": "temp_data.res.turns" },
+            { "var": "data.opened_at" },
+            { "var": "metadata.vars.engine_digest" },
+            { "var": "metadata.vars.orion_version" },
+            { "var": "temp_data.key" }
+          ],
+          "output": "temp_data.wrote"
+        }
+      }
+    },
+    {
+      "id": "finish_api",
+      "name": "Finish the row -- one statement, on the token",
+      "condition": {
+        "and": [
+          {
+            "and": [
+              { "==": [{ "var": "temp_data.n_live" }, 0] },
+              { "!": { "var": "data.finished" } }
+            ]
+          },
+          { "==": [{ "var": "metadata.vars.mode" }, "api"] }
+        ]
+      },
+      "continue_on_error": true,
+      "function": {
+        "name": "http_call",
+        "input": {
+          "connector": "kalam-api",
+          "method": "POST",
+          "path": { "cat": ["/v1/runner/matches/", { "var": "data.row.id" }, "/finish"] },
+          "headers": { "Authorization": { "cat": ["Bearer ", { "var": "data.tok.token" }] } },
+          "body": {
+            "claim_token": { "var": "data.token" },
+            "result": { "var": "temp_data.seatrows.items" },
+            "reason": { "var": "temp_data.res.reason" },
+            "turns": { "var": "temp_data.res.turns" },
+            "opened_at": { "var": "data.opened_at" },
+            "engine_digest": { "var": "metadata.vars.engine_digest" },
+            "orion_version": { "var": "metadata.vars.orion_version" },
+            "replay_key": { "var": "temp_data.key" }
+          },
+          "output": "temp_data.wrote_api"
+        }
+      }
+    },
+    {
+      "id": "when_counted",
+      "condition": {
+        "and": [
+          { "==": [{ "var": "temp_data.n_live" }, 0] },
+          { "!": { "var": "data.finished" } }
+        ]
+      },
+      "tasks": [
+        {
+          "id": "counted",
+          "name": "Halt unless the row is finished",
+          "function": {
+            "name": "filter",
+            "input": {
+              "condition": {
+                "if": [
+                  { "==": [{ "var": "metadata.vars.mode" }, "api"] },
+                  { "===": [{ "var": "temp_data.wrote_api.state" }, "finished"] },
+                  { ">": [{ "var": "temp_data.wrote.rows_affected" }, 0] }
+                ]
+              },
+              "on_reject": "halt"
+            }
+          }
+        },
+        {
+          "id": "done",
+          "name": "Mark the run complete",
+          "function": {
+            "name": "map",
+            "input": { "mappings": [{ "path": "data.finished", "logic": true }] }
+          }
+        }
+      ]
+    },
+    {
+      "id": "over",
+      "name": "Played and finished",
+      "condition": { "var": "data.finished" },
+      "function": {
+        "name": "map",
+        "input": {
+          "mappings": [
+            { "path": "data.outcome", "logic": "complete" },
+            { "path": "data.stopped_at_turn", "logic": { "var": "temp_data.i" } }
+          ]
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,171 @@
+{
+  "workflow_id": "tb-roster-run",
+  "name": "Kalam: reconcile this node's model set",
+  "description": "Every version the ladder says is verified or active, registered, admitted and activated ON THIS NODE. Models are a state-database entity and each replica is its own Orion with its own state database, so a roster is per node -- and a clock that reconciles from the shared schema needs no replica list anywhere, which is what keeps any clock from ever calling a replica. One step per item per tick: registration queues admission, and a later tick activates what passed. Nothing here writes to the platform schema; its database role has SELECT and nothing else on model_versions.",
+  "tags": ["pkg:kalam"],
+  "condition": true,
+  "loop": { "counter": "i", "max": 256 },
+  "tasks": [
+    {
+      "id": "roster",
+      "name": "What the ladder says this node should be able to play",
+      "condition": {
+        "and": [
+          { "==": [{ "var": "temp_data.i" }, 0] },
+          { "!=": [{ "var": "metadata.vars.mode" }, "api"] }
+        ]
+      },
+      "function": {
+        "name": "db_read",
+        "input": {
+          "connector": "kalam-db",
+          "query": { "$sql": "../sql/tb-roster-run-roster.sql" },
+          "params": [{ "var": "metadata.vars.model_prefix" }],
+          "output": "temp_data.rst"
+        }
+      }
+    },
+    {
+      "id": "when_rauth",
+      "condition": {
+        "and": [
+          { "==": [{ "var": "temp_data.i" }, 0] },
+          { "==": [{ "var": "metadata.vars.mode" }, "api"] }
+        ]
+      },
+      "tasks": [
+        {
+          "id": "rauth",
+          "name": "Exchange the runner key for a token",
+          "continue_on_error": true,
+          "function": { "name": "http_call", "input": { "$from": "constants.runner_token_call" } }
+        },
+        {
+          "id": "roster_api",
+          "name": "What the ladder says this node should be able to play",
+          "continue_on_error": true,
+          "function": {
+            "name": "http_call",
+            "input": {
+              "connector": "kalam-api",
+              "method": "GET",
+              "path": "/v1/runner/roster",
+              "headers": { "Authorization": { "cat": ["Bearer ", { "var": "data.tok.token" }] } },
+              "output": "temp_data.rstapi"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "rbody",
+      "name": "One roster, whoever answered",
+      "condition": { "==": [{ "var": "temp_data.i" }, 0] },
+      "function": {
+        "name": "map",
+        "input": {
+          "mappings": [
+            {
+              "path": "data.rb",
+              "logic": {
+                "if": [
+                  { "==": [{ "var": "metadata.vars.mode" }, "api"] },
+                  { "var": "temp_data.rstapi" },
+                  { "var": "temp_data.rst.0.body" }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "more",
+      "name": "Stop when the roster runs out",
+      "function": {
+        "name": "filter",
+        "input": {
+          "condition": { "<": [{ "var": "temp_data.i" }, { "var": "data.rb.n" }] },
+          "on_reject": "halt"
+        }
+      }
+    },
+    {
+      "id": "item",
+      "name": "Take version i, and clear the last one",
+      "function": {
+        "name": "map",
+        "input": {
+          "mappings": [
+            {
+              "path": "temp_data.it",
+              "logic": { "val": ["data", "rb", "items", { "val": ["temp_data", "i"] }] }
+            },
+            { "path": "temp_data.have", "logic": false },
+            { "path": "temp_data.made", "logic": false },
+            { "path": "temp_data.activated", "logic": false }
+          ]
+        }
+      }
+    },
+    {
+      "id": "have",
+      "name": "Does this node know it already?",
+      "continue_on_error": true,
+      "function": {
+        "name": "http_call",
+        "input": {
+          "connector": "kalam-orion",
+          "method": "GET",
+          "path": { "cat": ["/models/", { "var": "temp_data.it.model" }] },
+          "output": "temp_data.have"
+        }
+      }
+    },
+    {
+      "id": "register",
+      "name": "Register it here",
+      "condition": { "!": { "var": "temp_data.have.data.model_id" } },
+      "continue_on_error": true,
+      "function": {
+        "name": "http_call",
+        "input": {
+          "connector": "kalam-orion",
+          "method": "POST",
+          "path": "/models",
+          "body": {
+            "manifest": { "var": "temp_data.it.manifest" },
+            "artifact": {
+              "connector": { "var": "metadata.vars.models_bucket_connector" },
+              "key": { "var": "temp_data.it.key" },
+              "digest": { "var": "temp_data.it.digest" }
+            },
+            "tags": ["ladder"]
+          },
+          "output": "temp_data.made"
+        }
+      }
+    },
+    {
+      "id": "activate",
+      "name": "Activate what has passed",
+      "condition": {
+        "and": [
+          { "===": [{ "var": "temp_data.have.data.admission.state" }, "passed"] },
+          { "!==": [{ "var": "temp_data.have.data.status" }, "active"] }
+        ]
+      },
+      "continue_on_error": true,
+      "function": {
+        "name": "http_call",
+        "input": {
+          "connector": "kalam-orion",
+          "method": "PATCH",
+          "path": { "cat": ["/models/", { "var": "temp_data.it.model" }, "/status"] },
+          "body": { "status": "active" },
+          "output": "temp_data.activated"
+        }
+      }
+    }
+  ]
+}

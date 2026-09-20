@@ -1,5 +1,5 @@
 # Orion config for a RUNNER: a Kalam replica on hardware the deployment does not own. Requires
-# 1.8.1. Baked into this repository's image at /etc/orion/runner.toml.tmpl; the Soma half is soma's
+# 1.9.0. Baked into this repository's image at /etc/orion/runner.toml.tmpl; the Soma half is soma's
 # docker/soma.toml.tmpl. A runner is the only way Kalam runs: it reaches the platform through Soma's
 # gate and holds no database credential.
 #
@@ -43,35 +43,39 @@ auto_migrate = true
 # runs it.
 mode = "api"
 
+# MAY A CONNECTOR DIAL A PRIVATE ADDRESS. `kalam-api`, `kalam-blobs-put`, `kalam-models` and
+# `kalam-blobs` read this as `var://allow_private_urls`; `kalam-orion` is always allowed one,
+# because it is THIS NODE'S OWN admin API and on a standalone runner that is 127.0.0.1:8080.
+# One variable could never express both, which is why the exception is authored on the connector.
+#
+# Leave it false anywhere the runner is not on the compose bridge: `kalam-api` addresses the
+# platform from wherever the runner is, and a runner that will follow a redirect into a private
+# network is the wrong side of Orion's SSRF posture. web's scripts/check/configs.sh asserts it.
+allow_private_urls = ${KALAM_ALLOW_PRIVATE_URLS:-false}
+
 # The engine this runner plays, and the only rows its match clock may claim. DERIVED by
 # docker/entrypoint.sh from the component in this image, never typed: a literal that agrees with
 # nothing is silent everywhere -- the clock claims nothing, for ever, and the runner looks healthy
 # doing it. THE CARTRIDGE IS wasm32, so this does not vary by host architecture: the digest an
 # arm64 runner derives is the same one an amd64 deployment declared onto games.active_engine_digest,
 # and web's scripts/check/configs.sh 1j is the assertion.
-engine_digest = "${KALAM_ENGINE_DIGEST}"
+engine_digest = "${KALAM_ENGINE_DIGEST:?derived by entrypoint.sh from the component in this image}"
 
 # THE RUNNER'S CREDENTIAL, and the whole of what a machine needs to play matches. Minted from the
 # admin UI's Runners screen. Exchanged for a ten-minute `aud: runner` token, so the key itself is
 # presented once per refresh and never accompanies a match write -- and revoking it on that screen
 # stops this machine within one token lifetime.
-# THE :? FORM IS NOT ONE ORION UNDERSTANDS. It accepts a bare reference and a :- default and
-# refuses anything else as an invalid variable NAME, quoting the whole `RUNNER_KEY:?...` string.
-# Requiredness belongs in docker-compose.yml, which does have that form and fails before a
-# container is created rather than sixty seconds into a retry loop.
-#
-# AND SUBSTITUTION RUNS OVER THE FILE, NOT OVER ITS VALUES: a reference inside a COMMENT is
-# substituted too, and an invalid one there fails the config exactly as it would on a live setting.
-# Which is why this paragraph describes the form in words instead of showing it.
-runner_key = "${RUNNER_KEY}"
+# REQUIRED, AND IT SAYS SO ITSELF. `${NAME:?message}` stops the boot with that sentence and the
+# file, line and column when the variable is unset or empty -- so a runner started without a key
+# says which key, here, instead of failing its first token exchange a minute later. Orion reads the
+# three forms (a bare reference, `:-default`, `:?message`) and skips this file's `#` comments, so a
+# form may be written out in a comment without making its variable required.
+runner_key = "${RUNNER_KEY:?the runner credential, minted on the admin UI Runners screen}"
 
 # WHICH MACHINE THIS IS. The gate upserts a `runners` row on (key_id, label), so a runner
 # self-registers rather than being enrolled: two machines on one key are two rows, and the label is
 # what tells them apart on the Runners screen when one of them is wedged.
 #
-# NO NESTED DEFAULT. `${A:-${B}}` is not substituted as one expression here -- the inner `}` closes
-# the outer reference and the literal `}` is left on the value, registering a runner called
-# `mac-mini}`. A deployment sets the name it wants.
 runner_label = "${RUNNER_LABEL:-runner}"
 
 # Reported at token exchange and never enforced -- it answers "what is that machine" on the Runners
@@ -81,7 +85,7 @@ arch         = "${RUNNER_ARCH}"
 node_version = "${RUNNER_NODE_VERSION:-dev}"
 
 # Read by nothing in the package: the lanes this node plays are the tb-match channels entrypoint.sh
-# lets load-package.sh stage (RUNNER_CRON_WORKERS of the four the generator emits), and cron.workers below
+# lets entrypoint.sh write into the match channel's `slots` (RUNNER_CRON_WORKERS), and cron.workers below
 # is those lanes plus the roster's own worker.
 match_concurrency = 4
 
@@ -107,13 +111,26 @@ models_bucket_connector = "kalam-models"
 # `orion_version` -- a match recorded against one Orion and admitted against another is exactly
 # what a re-validation sweep looks for. It is the same ORION_VERSION this image was built from,
 # which is why it is not typed twice.
-orion_version = "${ORION_VERSION:-1.8.1}"
+orion_version = "${ORION_VERSION:-1.9.0}"
 
 # The node's own admin API, for the roster clock and for entrypoint.sh's package load. It never
 # leaves this machine.
 [admin_auth]
 enabled = true
-api_keys = ["${ORION_ADMIN_KEY}"]
+api_keys = ["${ORION_ADMIN_KEY:?this node's own admin key; the package is applied over it}"]
+
+# THIS RUNNER APPLIES ITS OWN PACKAGE, and answers /readyz 503 until it is serving (Orion #345).
+# entrypoint.sh generates the channels for this node's ROLE and lane count and compiles them into
+# the artifact named here; the server stages it, activates it, reloads once and only then reports
+# ready. Any failure stops the node non-zero.
+#
+# THAT MATTERS MORE ON A RUNNER THAN ANYWHERE. A node whose package did not load answers /readyz
+# 200, carries no match channel, claims nothing, and is counted as capacity by everything that
+# looks -- the invisible-capacity failure, on a machine nobody is watching. It used to be caught by
+# a fork that polled /readyz, ran a loader, read the active channel count back and `kill -TERM 1`.
+[packages]
+apply = ["${KALAM_ARTIFACT:-/var/lib/orion/kalam.package.json}"]
+signatures_dir = "${PLUGIN_SIG_DIR:-/sig}"
 
 [plugins]
 enabled = true
@@ -148,7 +165,7 @@ max_loaded_bytes = ${RUNNER_MAX_LOADED_BYTES:-2147483648}
 
 # `referenced` warms what a workflow names by LITERAL id, and tb-match names its model with a
 # `{"var": ...}` -- so it would warm nothing. The roster clock tags every registration `ladder`,
-# and this is what turns that tag into a warm session at boot (Orion 1.8.1).
+# and this is what turns that tag into a warm session at boot.
 preload = "referenced"
 preload_tags = ["ladder"]
 

@@ -2,16 +2,18 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-`kalam` ships **no server code**. It is an Orion **1.8.1** package, loaded at boot into the
-orion-server its runner image carries. It has three clocks. **`tb-match`** is a set of match lanes
-that all run `tb-match-run`: claim ONE queued row, then `observe` → one `model_infer` per live seat
+`kalam` ships **no server code**. It is an Orion **1.9.0** package, which the orion-server in its
+runner image applies to itself at boot (`[packages] apply`). It has three clocks. **`tb-match`** is
+ONE channel whose `concurrency.slots` is how many matches this node plays at once, each run of
+`tb-match-run`: claim ONE queued row, then `observe` → one `model_infer` per live seat
 → `step` until the engine stops returning views, then finish the row in place. **`tb-roster`**
 registers, admits and activates on this node every version the ladder says is verified or active.
 **`tb-admit`** is an admitting runner's only clock (`RUNNER_ROLE=admit`): claim one submission Soma
 prepared, register it, let Orion admit it, play it over the reference observations, delete it and
 report. Soma runs no model and judges the report.
-`scripts/gen-kalam.py` is the source. `workflows/` and `channels/` are its gitignored output, which
-the Dockerfile regenerates into the image. Kalam owns **execution only**. Soma owns the schema, the
+Everything is authored JSON and committed — `workflows/`, `channels/`, `connectors/`, `sql/`,
+`shared/` — with no generator and no build step. `entrypoint.sh` copies the package aside and shapes
+THAT for this node's role and slot count before the server applies it. Kalam owns **execution only**. Soma owns the schema, the
 public routes and every competitive decision, ants owns the rules, and Orion runs the models. The
 packages coordinate through Postgres and never call each other. Anything human-facing (running a
 runner, configuration, troubleshooting, releasing, layout) is in `README.md`.
@@ -19,14 +21,14 @@ runner, configuration, troubleshooting, releasing, layout) is in `README.md`.
 ## Checks
 
 ```sh
-python3 scripts/gen-kalam.py --check   # generated files match the generator
-./scripts/check-defs.sh                # --check + lint + clippy + fmt, all --deny-warnings; no stack
-./scripts/check-sql.sh                 # PREPARE the generated SQL + assert the kalam role's grants;
-                                       # needs tinybrains-db-1 and ../soma/migrations
+./scripts/check-defs.sh                # lint + clippy + fmt + clippy -c, all --deny-warnings; no stack
+./scripts/check-sql.sh                 # sql check as the kalam role + assert the grants it must NOT
+                                       # have; needs ../soma/migrations, starts its own postgres
 docker compose up -d --build           # a real match: this runner against web's local stack
 
-# check-defs.sh refuses an orion-server that is not 1.8.x (older ones report misleading schema
-# errors). The image carries the right one:
+# shared/package.json declares requires.orion, and lint/clippy/fmt/compile each check the running
+# binary against it first -- there is no version test in any script here. The image carries one in
+# range:
 docker run --rm --entrypoint orion-server ghcr.io/tiny-brains/kalam clippy /pkg/kalam --deny-warnings
 ```
 
@@ -55,14 +57,22 @@ identically, not just recorded.
   does and returns it on `claim.token`. `db_write` returns only `rows_affected`, which is how a fenced
   statement learns its fate (`wrote()`). Through the gate the route answers the same fact as a field
   (`applied`, `started`, `state`).
-- **The match lanes differ only in `channel_id` and `concurrency.key`.** `forbid` on a per-lane key
-  gives one match in flight per lane. Their shared `config` is `shared/kalam.json`. That file is a
-  shared document the admin API does not accept, so `load-package.sh` runs `orion-server compile`
-  and then `package apply`.
-- **A runner has one role** (`RUNNER_ROLE`, `entrypoint.sh`). `match` loads the lanes and the roster
-  and drops `tb-admit`; `admit` loads `tb-admit` alone, one cron worker, so an admission never shares
-  a node with a match and its probe is never timed under a match's load. `load-package.sh` does the
-  dropping; the workflows load either way.
+- **The match channel is ONE channel with `slots`.** `{"policy": "forbid", "key": "match", "slots":
+  N}` admits up to N runs of that key at once, where `forbid` used to mean exactly one — so the four
+  cloned channels that differed only in `channel_id` and `concurrency.key` are gone. A run reads its
+  own slot as `metadata.trigger.singleton_slot`. `slots` is a LITERAL, never a reference (Orion
+  takes lock cardinality as an authoring decision), so the committed `slots` is the shipped maximum
+  and `entrypoint.sh` writes the number this node plays into its copy. `shared/kalam.json` holds the shared
+  `config`; it is a shared document the admin API does not accept, so the set is always compiled
+  before it is applied.
+- **A runner has one role** (`RUNNER_ROLE`), and **`scripts/load-package.sh` is the one place that
+  knows what a role's package looks like.** `match` gets the match channel and the roster; `admit`
+  gets `tb-admit` alone, one cron worker, so an admission never shares a node with a match and its
+  probe is never timed under a match's load. It shapes a COPY, so the image's own tree is never
+  written to and a restart shapes it the same way whatever the last boot did. All three workflows
+  ship either way: a workflow with no channel never runs.
+  **`entrypoint.sh` calls that script (`--compile-only`) rather than repeating the rule** — a node
+  and an operator must shape a package identically, and writing it twice is how they stop doing so.
 - **An admitting runner executes and never decides.** It registers the registration Soma rebuilt,
   never the competitor's manifest; sends Orion's admission record and stats as they came, and the
   probe's tally; and judges nothing, not a stage, a budget or a timing. Whose fault a refusal is, is
@@ -70,18 +80,20 @@ identically, not just recorded.
 - **The admission node keeps nothing between walks**: `tb-admit` deletes what it registered, and a
   409 on `register` clears a dead walk's leftover. Never archive instead: Orion activates only a
   `draft`, so an archived model can never be admitted again.
-- **The worker pool is the lanes plus one, and the one is the roster's.** Orion has one cron pool
-  per node and a match holds its worker for the whole match, so `entrypoint.sh` loads only
-  `RUNNER_CRON_WORKERS` lanes (`stage-set.py --drop` leaves the rest out) and sizes `cron.workers`
-  one larger. Never size the pool to the lanes: long matches then skip the roster's ticks, and every
-  lane refuses the trials of versions it never registers.
+- **The worker pool is the slots plus one, and the one is the roster's.** Orion has one cron pool
+  per node and a match holds its worker for the whole match, so `entrypoint.sh` sets the channel's
+  `slots` to `RUNNER_CRON_WORKERS` and sizes `cron.workers` one larger. Never size the pool to the
+  slots: long matches then skip the roster's ticks, and every slot refuses the trials of versions it
+  never registers.
 - **`group_runs()` folds consecutive tasks that share a condition into a task group.** A group's
   condition is evaluated once, and a falsy one skips the span *without evaluating the members'*,
   which is what makes stripping the members' conditions equivalent.
-- **A seat is a task.** The task list is fixed, so the generator emits `MAX_SEATS` copies of each
-  per-seat task, each conditioned on the row's `seat_count`, and the claim refuses a wider row.
-  `MAX_SEATS` must reach the top seat count in the cartridge's `limits.boards`. web's
-  `scripts/check/configs.sh` reads the `MAX_SEATS = <n>` line, so keep that exact form.
+- **A seat is a task, written ONCE.** The task list is fixed, so each per-seat task is an `$each`
+  over `constants.seats` in `shared/kalam.json` — `{{seat}}` interpolates into an id, a name or a
+  `var` path, `{"$param": "seat"}` inserts it typed — each conditioned on the row's `seat_count`, and
+  the claim refuses a wider row. **`constants.seats` must reach the top seat count in the cartridge's
+  `limits.boards`**; web's `scripts/check/configs.sh` reads its length. A repeated condition
+  (`seat-exists`, `seat-plays`) is a value fragment spliced with `$use`.
 - **The board rides the claim.** The row carries `map` whole, and `world` passes it to `worldgen`,
   because the component carries no boards. `K_ROW` joins `season_maps` exactly as the gate's claim
   does.
@@ -113,23 +125,31 @@ identically, not just recorded.
 
 Orion:
 
-- **`package apply` stops at the first workflow it can't activate.** Everything after it stays a
-  draft, and a draft cron channel has no schedule. `/readyz` and the plugin list still look healthy,
-  which is why the entrypoint checks the count of active `pkg:kalam` channels and kills the node if
-  the check fails.
-- **An absent `env://` skips the connector, and an empty one resolves.** A workflow that names a
-  skipped connector can't activate, and a connector needs **every** `env://` it names. That is why
-  compose sets the `db`-mode variables to `""` rather than omitting them.
+- **`package apply` stops at the first workflow it can't activate**, and everything after it stays a
+  draft — a draft cron channel has no schedule. That used to leave `/readyz` green on a node serving
+  nothing, which is why the entrypoint counted active `pkg:kalam` channels and killed the node.
+  `[packages] apply` is that invariant now: `/readyz` answers 503 (`components.packages: "applying"`)
+  until every listed package is serving, and any failure — including a member the reload quarantines
+  — exits the process non-zero.
+- **An absent `env://` skips the connector, and SINCE 1.9.0 SO DOES AN EMPTY ONE.** An endpoint is
+  scheme-checked again after its references resolve, so `""` is refused ("uses no scheme") exactly as
+  `ftp://` would be. A workflow that names a skipped connector can't activate, and a connector needs
+  **every** `env://` it names — so compose gives the `db`-mode variables well-formed URLs that route
+  nowhere (`.invalid`, RFC 2606) rather than the empty strings that used to be enough.
 - **A connector resolves `env://NAME` only when it is the whole string.** `"Bearer env://X"` is a
   literal, so `kalam-orion` reads the whole header from `ORION_ADMIN_BEARER`.
-- **An http connector's `url` can't be `env://`, and `allow_private_urls` is a boolean.** Every
-  offline gate validates both before references resolve, so `stage-set.py` writes them into a staged
-  copy at load. A storage connector's `endpoint` does take `env://`.
-- **Storage connectors are SSRF-checked too.** `kalam-orion` is always allowed private addresses
-  (it is this node). Everything else follows `KALAM_ALLOW_PRIVATE_URLS`, and without it a local
-  models bucket fails the roster at the `head` stage.
-- **A plugin can't be deleted (409) while an active workflow calls its functions.**
-  `load-package.sh`'s retire sweep ignores that failure.
+- **An http connector's `url` CAN be `env://` now, and any connector boolean can be a reference.**
+  `allow_private_urls` is `var://allow_private_urls`, from `[vars]`, and `kalam-api`,
+  `kalam-orion` and `kalam-blobs-put` name their URLs as `env://`. Nothing stages a copy of the set
+  any more. `var://` does NOT work in a URL — the scheme check runs on the authored string — so a
+  URL is `env://` and a boolean is either.
+- **Storage connectors are SSRF-checked too.** `kalam-orion` is always allowed private addresses,
+  authored as a literal `true` because it is THIS NODE calling itself and one variable could never
+  express both postures. Everything else follows `[vars] allow_private_urls`, and without it a local
+  models bucket fails the roster at the `head` stage. `entrypoint.sh` normalises the variable to a
+  bare TOML boolean: `${X:-false}` falls back only when X is UNSET, and compose passes it EMPTY.
+- **A plugin can't be deleted (409) while an active workflow calls its functions.** `apply --prune`
+  refuses before it writes anything when something outside the prune still uses a member.
 - **Every admin API reply is wrapped in `{"data": …}`.** The barrier reads
   `temp_data.m0.data.status`. If it read `temp_data.m0.status` instead, `null` would never equal
   `"active"`, and every match would be released for ever with both sides looking healthy.
@@ -137,7 +157,7 @@ Orion:
 - **A cron occurrence's `data` is unreadable**: it returns nowhere, and a trace carries no per-task
   detail (and is dropped above `trace_queue.max_result_size_bytes`). A failing run can be diagnosed
   only by *which* task failed.
-- **Keep `task_details: false` on the match lanes and on `tb-admit`.** With it on, Orion builds a
+- **Keep `task_details: false` on the match channel and on `tb-admit`.** With it on, Orion builds a
   full trace of every write, the per-seat policy tensors included, outside `max_snapshot_bytes`, and
   `errors_only` drops it only after it has been built and serialized. A runner's memory then grows by
   gigabytes.
@@ -145,7 +165,7 @@ Orion:
   the finishing sweep, so it is also the ceiling on `max_turns`, which Soma's `season_rule_spec()`
   caps at 1000 to match. web's `configs.sh` reads the `MATCH_LOOP_MAX = <n>` line, so keep that
   exact form. `[engine] max_loop_iterations` must sit above it. The
-  lane's `timeout_ms` (40 min) is sized for 1000 turns × 1000 ms plus overhead, and the shutdown
+  channel's `timeout_ms` (40 min) is sized for 1000 turns × 1000 ms plus overhead, and the shutdown
   force timeout (2700 s) must stay above it.
 - **`models.max_timeout_ms` clamps `model_infer`'s deadline silently.** It must be at least the
   season ceiling for `turn_ms`.
@@ -159,9 +179,11 @@ Orion:
 - **A mapping whose logic is `null` writes nothing.** The slot keeps the previous sweep's value.
   `mapping()` emits `False` to clear a slot, and `temp_data` survives a sweep, so per-item slots are
   cleared explicitly.
-- **`${…}` in `docker/*.toml.tmpl` is substituted even inside comments.** Only `${X}` and `${X:-d}`
-  work: `:?` is an invalid name, and a nested default leaves a stray `}` on the value.
-  Requiredness belongs in `docker-compose.yml`.
+- **`${…}` in `docker/*.toml.tmpl` takes three forms and SKIPS comments.** `${X}`, `${X:-default}`
+  and `${X:?message}` — which stops the boot with that sentence and the file, line and column when X
+  is unset or empty, so requiredness can live beside the setting instead of only in
+  `docker-compose.yml`. Defaults and messages nest. A form written out in a comment no longer makes
+  its variable required.
 
 JSONLogic (datalogic):
 
@@ -202,12 +224,14 @@ Other:
 Delete it once the api path has proven itself. It goes as one change:
 
 - [ ] `connectors/kalam-db.json` and `connectors/kalam-blobs.json`
-- [ ] in `gen-kalam.py`: the `MODE_DB` tasks (`reap`, `claim`, `row`, `release`, `start`, `renew`,
-      `presign`, `finish`, `roster`), the `K_*` and `R_ROSTER` statements, `MODE_DB`/`T0_DB`, the
-      `db` arm of every `{"if": [MODE_API, …]}`, and the `[vars]`-built `data.ct` and its `vars` checks
+- [ ] in `workflows/tb-match-run.json` and `tb-roster-run.json`: the `db`-mode tasks (`reap`,
+      `claim`, `row`, `release`, `start`, `renew`, `presign`, `finish`, `roster`), their
+      `sql/tb-*.sql` files, the `db` arm of every `{"if": [<api mode>, …]}`, and the `[vars]`-built
+      `data.ct` and its `vars` checks
 - [ ] `docker/replica-db.toml.tmpl`, and `mode` in `runner.toml.tmpl`
-- [ ] `docker-compose.yml`: the empty `KALAM_DB_URL`, `R2_BUCKET`, `R2_ACCESS_KEY`, `R2_SECRET_KEY`
-- [ ] `load-package.sh`: the `kalam-db` and `kalam-blobs` staging lines
+- [ ] `docker-compose.yml`: the five `db`-mode placeholder variables
 - [ ] `scripts/check-sql.sh`, since the package would ship no SQL
 - [ ] web's `scripts/check/configs.sh`: the execution-contract block, and point its other
       `replica-db.toml.tmpl` checks (ops budget, Orion version, drain, no cluster) at `runner.toml.tmpl`
+- [ ] `scripts/check-defs.sh`: point `clippy -c` at `runner.toml.tmpl`, which can then declare every
+      `[vars]` the package reads — the reason it is checked against `replica-db.toml.tmpl` today

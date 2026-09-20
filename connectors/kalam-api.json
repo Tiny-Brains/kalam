@@ -5,9 +5,10 @@
   "tags": ["pkg:kalam"],
   "config": {
     "type": "http",
-    "url": "http://soma:8080",
+    "url": "env://KALAM_API_URL",
     "headers": { "content-type": "application/json", "user-agent": "kalam-runner" },
     "retry": { "max_retries": 3, "retry_delay_ms": 500 },
-    "timeout_ms": 15000
+    "timeout_ms": 15000,
+    "allow_private_urls": "var://allow_private_urls"
   }
 }

@@ -5,7 +5,7 @@
 # rollback to numbers nobody kept. Delete this file, that check's execution-contract block and the
 # branch together (CLAUDE.md, *Removing db mode*).
 #
-# Orion config for a KALAM REPLICA: the match clocks, and nothing else. Requires 1.8.1. The Soma
+# Orion config for a KALAM REPLICA: the match clocks, and nothing else. Requires 1.9.0. The Soma
 # half is soma.toml.tmpl.
 #
 # One of these per replica, and NO [cluster] block: a shared `forbid` row would make each match
@@ -47,6 +47,11 @@ engine_digest = "${KALAM_ENGINE_DIGEST}"
 # own engine digest.
 mode = "${KALAM_MODE:-db}"
 
+# MAY A CONNECTOR DIAL A PRIVATE ADDRESS. Read by every connector but `kalam-orion` as
+# `var://allow_private_urls`; that one is always allowed a private address because it is THIS
+# NODE'S OWN admin API. A db-mode replica sits beside the database, so this is normally true here.
+allow_private_urls = ${KALAM_ALLOW_PRIVATE_URLS:-true}
+
 # THE RUNNER'S CREDENTIAL, and the whole of what a machine needs to play matches: no connection
 # string, no bucket secret, no admin token. Minted from the admin UI. Exchanged for a ten-minute
 # `aud: runner` token, so the key itself is presented once per refresh and never accompanies a match
@@ -56,9 +61,6 @@ runner_key   = "${KALAM_RUNNER_KEY:-}"
 # self-registers rather than being enrolled: two machines on one key are two rows, and the label is
 # what tells them apart on the Runners screen.
 #
-# NO NESTED DEFAULT. `${A:-${B}}` is not substituted as one expression here -- the inner `}` closes
-# the outer reference and the literal `}` is left on the value, which registers a runner called
-# `kalam-2}`. A deployment sets the name it wants.
 runner_label = "${KALAM_RUNNER_LABEL:-kalam}"
 # Reported at token exchange and never enforced -- it answers "what is that machine" and nothing
 # else. The cartridge is wasm32, so the engine digest does NOT vary by host architecture.
@@ -69,7 +71,7 @@ runner_label = "${KALAM_RUNNER_LABEL:-kalam}"
 arch         = "${RUNNER_ARCH}"
 node_version = "${KALAM_NODE_VERSION:-dev}"
 
-# Read by nothing in the package: the lane count is the tb-match channels the generator emits.
+# Read by nothing in the package: the lane count is the match channel's `slots`.
 match_concurrency = 4
 
 renew_every_n_turns = 30
@@ -104,7 +106,7 @@ models_bucket_connector = "kalam-models"
 # What ran the adapters, recorded on every match this replica finishes. MUST EQUAL the soma node's
 # `orion_version`, which is the same ORION_VERSION the image was built from -- a match recorded
 # against one Orion and admitted against another is exactly what a re-validation sweep looks for.
-orion_version = "${ORION_VERSION:-1.8.1}"
+orion_version = "${ORION_VERSION:-1.9.0}"
 
 [admin_auth]
 enabled = true
@@ -135,7 +137,7 @@ max_loaded_bytes = 2147483648
 
 # `referenced` warms what a workflow names by LITERAL id, and tb-match names its model with a
 # `{"var": ...}` -- so it would warm nothing. The roster clock tags every registration `ladder`,
-# and this is what turns that tag into a warm session at boot (Orion 1.8.1).
+# and this is what turns that tag into a warm session at boot.
 preload = "referenced"
 preload_tags = ["ladder"]
 

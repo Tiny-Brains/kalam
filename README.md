@@ -1,6 +1,6 @@
 # kalam
 
-Kalam is the TinyBrains match runner. It is an Orion 1.8.1 package (cron channels, generated
+Kalam is the TinyBrains match runner. It is an Orion 1.9.0 package (cron channels, generated
 workflows, connectors) shipped inside a runnable image, `ghcr.io/tiny-brains/kalam`: orion-server,
 the package, and the Ants engine from one ants release. A runner claims queued matches through
 [Soma](https://github.com/Tiny-Brains/soma)'s runner gate, plays them turn by turn on Orion's own
@@ -22,19 +22,24 @@ docker compose logs -f runner
 docker compose --profile admit up -d   # the deployment's admitting runner, on one machine
 ```
 
-A healthy boot logs the architecture and engine it derived, then the self-load, and ends with:
+A healthy boot logs what it derived, generates the package for its role, and hands the applying to
+the server:
 
 ```text
 ==> arch arm64
 ==> engine sha256:…
-==> 2 match lane(s), 3 cron workers (one is the roster's)
-==> loading the kalam package into this node
-==> loaded: tb.ants is live and <n> channels are active, this node can claim
+==> private addresses: false
+==> 2 match slot(s), 3 cron workers (one is the roster's)
+==> generating the match package
+==> compiling the kalam package
+==> starting orion-server with /etc/orion/runner.toml.tmpl
 ```
 
-If it ends with `self-load: …` instead, the container stops on purpose: see
-[Troubleshooting](#troubleshooting). The admitting runner (`docker compose logs -f admit`) logs
-`==> an admitting runner: the tb-admit lane, 1 cron worker, no match lanes` and loads one channel.
+**`/readyz` answers 503 until the package is serving**, and any failure applying it stops the
+container non-zero — a runner that cannot claim is never reported as capacity. If it stops, the
+reason is the last error in the log: see [Troubleshooting](#troubleshooting). The admitting runner
+(`docker compose logs -f admit`) logs `==> an admitting runner: the tb-admit channel, 1 cron worker,
+no match lanes`.
 
 **Against web's local stack** (bring it up first, as [web](https://github.com/Tiny-Brains/web)'s
 README says):
@@ -76,14 +81,14 @@ Set in `.env`. [`docker-compose.yml`](docker-compose.yml) refuses to start witho
 | `RUNNER_SIG_DIR` | `./keys/signatures` | The deployment's plugin signatures, mounted read-only |
 | `KALAM_IMAGE` | required | The image, and so the engine: a release (`ghcr.io/tiny-brains/kalam:<version>`), or `tinybrains/kalam:dev` built from this checkout |
 | `MODELS_BUCKET` | `tinybrains-models` | The models bucket's name |
-| `RUNNER_CRON_WORKERS` | `2` | Matches at once: the match lanes loaded, at most the four the package ships. Orion's `cron.workers` is this plus one, for the roster |
+| `RUNNER_CRON_WORKERS` | `2` | Matches at once: the match channel's `concurrency.slots`, at most the four the package ships. Orion's `cron.workers` is this plus one, for the roster |
 | `RUNNER_MAX_CACHE_BYTES` | 4 GiB | The on-disk model cache (the `runner-models` volume) |
 | `RUNNER_MAX_LOADED_BYTES` | 2 GiB | Model sessions held in memory at once |
 | `RUNNER_ALLOW_PRIVATE_URLS` | unset | `1` only against a local stack: lets the connectors reach private addresses |
 | `RUNNER_ADMIN_PORT` | `8090` | Loopback port for this node's `/health` and `/metrics` |
 | `RUNNER_ARCH` | from `uname -m` | Reported on the Runners screen. Leave it unset |
 | `RUNNER_NODE_VERSION` | `dev` | Reported on the Runners screen |
-| `ORION_VERSION` | `1.8.1` | Recorded on every match. Must equal the Soma node's `orion_version` |
+| `ORION_VERSION` | `1.9.0` | Recorded on every match. Must equal the Soma node's `orion_version` |
 | `RUNNER_SHUTDOWN_DRAIN_SECS` | `5` | Orion `server.shutdown_drain_secs` |
 | `RUNNER_SHUTDOWN_FORCE_SECS` | `2700` | Orion `server.shutdown_force_timeout_secs`: the real bound on a draining match |
 | `RUNNER_CRON_SHUTDOWN_SECS` | `2700` | Orion `cron.shutdown_timeout_secs` |
@@ -104,7 +109,7 @@ service and nothing on `runner`, whose role is `match`. The terms a match is pla
 and renew interval, the refusal and strike ceilings, the replay and model prefixes) arrive on each
 claim from the match's season, and are not configured here.
 
-Build args: `ANTS_RELEASE` (empty means the latest ants release) and `ORION_VERSION` (`1.8.1`).
+Build args: `ANTS_RELEASE` (empty means the latest ants release) and `ORION_VERSION` (`1.9.0`).
 
 ## Run a runner
 
@@ -155,7 +160,7 @@ That file never builds, never lets `RUNNER_ALLOW_PRIVATE_URLS` through, runs Ori
 - **Size the Docker VM** above `RUNNER_MAX_CACHE_BYTES + RUNNER_MAX_LOADED_BYTES` plus the runtime:
   about 8 GiB at the defaults, more if you raise `RUNNER_CRON_WORKERS`. Below that the model cache
   thrashes. Every eviction re-fetches an artifact over the WAN, and it shows only as slowness.
-- **Capacity is `RUNNER_CRON_WORKERS`.** That many match lanes load, up to the four the package
+- **Capacity is `RUNNER_CRON_WORKERS`.** That many slots on the one match channel, up to the four the package
   ships, and Orion's pool is one worker larger so the roster clock always has one: with a shared
   pool, long matches skip its ticks, new versions go unregistered, and every lane refuses their
   trials. Start at 2 and watch lease renewals before raising it: each match in flight keeps its
@@ -232,8 +237,8 @@ while it is plainly switched on.
 | Symptom | Cause | Fix |
 |---|---|---|
 | Boots healthy, never claims a match | The engine digest (the `==> engine` boot line) is not the one Soma declared, because the image was built from another ants release | Pin `KALAM_IMAGE` to an image built from the deployment's ants release. Its `dev.tinybrains.ants.engine` label names the digest |
-| `self-load: tb.ants=… active-channels=…` and the container stops | A workflow could not activate, so `package apply` left every channel after it as a draft (a draft cron channel never fires) | Read the error above it. Usually a connector names an `env://` variable that is **absent**: it must be set, even to the empty string. A missing or wrong signature (`RUNNER_SIG_DIR`, `TB_TRUST_PUBLIC_KEY`) quarantines the engine the same way |
-| `self-load: the package did not load` | `load-package.sh` failed | Read its output above: signatures, the trust key, or a private address refused |
+| `failed to apply at startup: … is not serving on this node` and the container stops | The reload quarantined something the package carries, so the node would have served without it | Read the WARN lines above: each names the member and why. A missing or wrong signature (`RUNNER_SIG_DIR`, `TB_TRUST_PUBLIC_KEY`) quarantines the engine this way |
+| `activation stopped at workflows '…': connector(s) … not found` | A connector was skipped at load, so no workflow naming it could activate | A connector needs **every** `env://` it names to resolve to something well-formed. Since Orion 1.9.0 an EMPTY value is refused too ("uses no scheme"), so the `db`-mode placeholders are URLs that route nowhere, not empty strings |
 | Replay PUT 403 `SignatureDoesNotMatch` | `RUNNER_BLOB_ENDPOINT` differs from Soma's | Make them the same string |
 | Shown as **quiet** or **key or owner**, or never appears | The token exchange is refused: 401 (the key is revoked or unknown, or its owner is no longer an admin) or 429 (too many runners behind one address) | Mint a new key or re-grant the owner. For 429, raise Soma's `runner_token_rate` or spread the machines across addresses |
 | Matches are claimed and handed back; rows eventually fail `MODEL_UNAVAILABLE` | This node can't serve a seat's model, because its roster clock hasn't registered and activated it | Check `MODELS_ENDPOINT`, `MODELS_BUCKET` and the read key. Against a local stack, also check `RUNNER_ALLOW_PRIVATE_URLS=1` |
@@ -244,19 +249,17 @@ while it is plainly switched on.
 
 ## Developing the package
 
-[`scripts/gen-kalam.py`](scripts/gen-kalam.py) is the source of `workflows/` and `channels/`, which
-are gitignored build output: the SQL and JSONLogic are readable there and inlined into JSON. The
-Dockerfile regenerates them into the image. `connectors/` and `shared/kalam.json` are authored JSON.
-[CLAUDE.md](CLAUDE.md) has the rules and the Orion gotchas.
+Everything is authored JSON and committed: `workflows/`, `channels/`, `connectors/`, `sql/` and
+`shared/`. There is no generator and no build step — `orion-server compile` resolves `$from`, `$use`,
+`$each` and `$sql` into what the admin API accepts. The per-seat tasks are written ONCE, over
+`constants.seats`. [CLAUDE.md](CLAUDE.md) has the rules and the Orion gotchas.
 
 | Command | What it does | Needs |
 |---|---|---|
-| `python3 scripts/gen-kalam.py` | Writes `workflows/` and `channels/` | Python 3 |
-| `python3 scripts/gen-kalam.py --check` | Fails if the files on disk drifted from the generator | Python 3 |
-| `./scripts/check-defs.sh` | `--check`, then `orion-server lint` and `clippy` (both `--deny-warnings`), then `fmt --check` on `connectors/` and `shared/` | `orion-server` 1.8.x on `PATH` |
-| `./scripts/check-sql.sh` | PREPAREs the generated SQL against a scratch database built from Soma's migrations, and asserts the `kalam` role's grants | Docker; web's running `tinybrains-db-1`; `../soma/migrations` (override with `MIGRATIONS`, `DB_CONTAINER`, `DB_USER`) |
+| `./scripts/check-defs.sh` | `orion-server lint`, `clippy`, `fmt --check` over the whole set, and `clippy -c docker/replica-db.toml.tmpl` (all `--deny-warnings`) | `orion-server` in `shared/package.json`'s range, on `PATH` |
+| `./scripts/check-sql.sh` | `orion-server sql check` against a scratch schema built from Soma's migrations, as the `kalam` role, and asserts the grants that role must NOT have | Docker (or `SQLCHECK_DATABASE`); `../soma/migrations` (override with `MIGRATIONS`) |
 | `docker compose up -d --build` | Builds this checkout and runs it as a runner | Docker and a Soma |
-| `ORION_ADMIN=… ORION_ADMIN_API_KEY=… ./scripts/load-package.sh` | Compiles and applies the package into a running 1.8.1 node, and retires objects it no longer ships. The entrypoint runs it at boot | `orion-server`, curl, Python 3 |
+| `ORION_ADMIN=… ORION_ADMIN_API_KEY=… ./scripts/load-package.sh [--prune]` | Shapes this role's package, compiles it and applies it into a running node; `--prune` retires what the applied version carried and this one does not. `--compile-only -o <file>` stops after compiling, which is what `entrypoint.sh` calls at boot | `orion-server` |
 
 - If the host's `orion-server` is older than 1.8, lint with the image's copy:
   `docker run --rm --entrypoint orion-server ghcr.io/tiny-brains/kalam clippy /pkg/kalam --deny-warnings`.
@@ -285,7 +288,7 @@ git tag vX.Y.Z && git push origin vX.Y.Z      # from main: publishes the image
   `ANTS_RELEASE` under a live season.
 - Never re-cut a tag. Runners pin versions.
 - When the engine changes, re-sign with web's `scripts/setup/sign-plugins.sh` and give every runner
-  the new signatures. Otherwise its self-load stops on a quarantined engine.
+  the new signatures. Otherwise the boot apply stops it on a quarantined engine.
 
 ## Layout
 
@@ -297,16 +300,22 @@ connectors/                    authored connector definitions
   kalam-blobs-put.json         the replay PUT to a presigned URL; base URL from R2_ENDPOINT
   kalam-db.json                db mode only: Postgres as the kalam role
   kalam-blobs.json             db mode only: signs replay PUTs itself
-shared/kalam.json              shared constants: clock tracing, the lanes' configs, the token call
+shared/kalam.json              shared constants: clock tracing, the channels' configs, the token call
+shared/package.json            the package's name and the Orion range it needs
+workflows/                     tb-match-run, tb-roster-run, tb-admit-run -- authored, with the
+                               per-seat tasks written once over constants.seats with $each
+channels/                      tb-match (its slots are the matches at once), tb-roster, tb-admit
+sql/                           the statements the workflows name with {"$sql": ...}
 scripts/
-  gen-kalam.py                 source of workflows/ and channels/: the SQL, the task lists, the lanes,
-                               tb-admit
-  check-defs.sh                no-stack gate: drift, lint, clippy, fmt
-  check-sql.sh                 PREPARE the generated SQL; assert the kalam role's grants
-  load-package.sh              compile and apply the package into a node
-  stage-set.py                 stage connectors with a deployment's URLs and private-address flags
+  check-defs.sh                no-stack gate: clippy (which gates on lint), fmt, clippy -c
+  check-sql.sh                 sql check as the kalam role; assert the grants it must NOT have
+  load-package.sh              shape this role's package (which channels, how many slots),
+                               compile it, apply it; --prune retires what a version dropped.
+                               entrypoint.sh calls it with --compile-only at boot
 docker/
-  entrypoint.sh                derive arch, engine digest and role, migrate, self-load, exec orion-server
+  entrypoint.sh                derive arch, engine digest and role, migrate, compile this
+                               node's package via load-package.sh, exec orion-server (which
+                               applies it and holds /readyz until it serves)
   runner.toml.tmpl             the runner's Orion config
   replica-db.toml.tmpl         db-mode config: run by nothing, kept for the rollback and web's check
 Dockerfile                     the runner image: orion-server, the package, the engine from an ants release
@@ -340,7 +349,7 @@ plugins/tb-ants/               optional local engine for lint (gitignored)
   has waited Soma's `refusal_grace_secs` since it was paired, since a count of claims alone is spent
   in seconds by the lanes on a new trial. Trials are claimed before ranked matches, and within each
   kind a refused row after the fresh ones.
-- **The roster always has a worker.** Orion's pool is the match lanes plus one, and only
+- **The roster always has a worker.** Orion's pool is the match slots plus one, and only
   `RUNNER_CRON_WORKERS` lanes load, so no number of long matches can skip a roster tick.
 - **A runner has one role.** A match runner loads no `tb-admit`, and an admitting runner loads
   nothing else, so an admission never shares a node with a match.
@@ -368,7 +377,7 @@ plugins/tb-ants/               optional local engine for lint (gitignored)
 - `tb-match-run` keeps sweeping to its loop max (1010) after the match finishes, with every task
   skipped.
 - A new version's first registration logs an ERROR: the roster's existence check is a GET that
-  404s, and so is the barrier's check while a claimed trial waits for it. Orion 1.8.1's `http_call`
+  404s, and so is the barrier's check while a claimed trial waits for it. Orion's `http_call`
   has no accepted-status option, and the model list is paginated, so both stay per-model GETs.
 - Orion's `Message.audit_trail` keeps old and new values for every task execution, and there is no
   setting to turn it off.
@@ -377,7 +386,7 @@ plugins/tb-ants/               optional local engine for lint (gitignored)
 - `match_concurrency` in the runner config is read by nothing, and in api mode neither is
   `refusal_ceiling`.
 - An admitting runner's idle poll is a token exchange and a claim every 10 s, like a lane's.
-- Every admission runs twice on the admitting runner: Orion 1.8.1 queues one when a model is
+- Every admission runs twice on the admitting runner: Orion queues one when a model is
   registered and `admit?wait=true` runs another inline, and registration has no way to skip the
   queued one. When the inline one fails fast, `tb-admit` deletes the model before the queued one
   finishes, which logs `Model admission could not be recorded` at ERROR.

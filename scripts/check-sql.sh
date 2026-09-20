@@ -1,104 +1,94 @@
 #!/usr/bin/env bash
-# PREPARE every statement the package actually ships, against a schema built from Soma's migrations.
+# PREPARE every statement this package ships, against a schema built from Soma's migrations, AS THE
+# `kalam` ROLE -- and assert what that role must NOT be able to do.
 #
-#   ./scripts/check-sql.sh            # needs the db container up
+#   ./scripts/check-sql.sh
 #
-# Kalam's statements live twice: readably in scripts/gen-kalam.py, and inlined as single-line JSON
-# strings in the workflow it generates. This checks the SHIPPED copy -- it pulls each `query` out of
-# workflows/*.json and asks Postgres to parse and plan it, so a statement hand-edited in the JSON
-# fails here rather than on a cron tick. What each statement DOES is soma/scripts/verify/run.sh's
-# walk, and what a match does is a real match.
+# Two halves, and only the first is orion-server's:
+#
+#   sql check     every `db_read`/`db_write` in the set, prepared and planned on a scratch schema as
+#                 the role `kalam-db` connects as. On PostgreSQL 16+ the plan (EXPLAIN GENERIC_PLAN)
+#                 proves the role's table and column grants, so a statement naming a column `kalam`
+#                 has no grant on fails HERE rather than on a cron tick.
+#   the negatives the grants this role must NOT have. No schema check can express "the runner may not
+#                 write `matches.rated_at`" or "may not read `ratings`" -- those are the OWNERSHIP
+#                 BOUNDARY with Soma (counting is Soma's, and a runner must not see a competitive
+#                 decision), and a widened grant would make every positive check pass harder.
 #
 # Kalam ships no migrations: the schema is Soma's and Kalam holds a narrow role on it. MIGRATIONS is
 # relative because the repos sit beside each other; override it when they do not.
+#
+# IT NEEDS NO STACK, only a PostgreSQL 16+ server, and starts a throwaway one when SQLCHECK_DATABASE
+# does not name one.
+#
+#   MIGRATIONS          Soma's migrations (default ../soma/migrations)
+#   SQLCHECK_DATABASE   a PostgreSQL 16+ superuser URL. Unset starts and removes a container.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-DB_CONTAINER="${DB_CONTAINER:-tinybrains-db-1}"
-DB_USER="${DB_USER:-$(docker exec "$DB_CONTAINER" printenv POSTGRES_USER)}"
 MIGRATIONS="${MIGRATIONS:-../soma/migrations}"
-SCRATCH=kalam_sqlcheck
+[ -d "$MIGRATIONS" ] || { echo "no migrations at $MIGRATIONS -- set MIGRATIONS" >&2; exit 1; }
 
-psql() { docker exec -i "$DB_CONTAINER" psql -U "$DB_USER" "$@"; }
-drop() { psql -d postgres -q -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS $SCRATCH" 2>/dev/null; }
+DATABASE="${SQLCHECK_DATABASE:-}"
+CONTAINER=""
+SCHEMA=$(mktemp -d)
+cleanup() {
+  rm -rf "$SCHEMA"
+  [ -n "$CONTAINER" ] && docker rm -f "$CONTAINER" > /dev/null 2>&1
+  return 0
+}
+trap cleanup EXIT
 
-trap drop EXIT
-drop
-psql -d postgres -q -v ON_ERROR_STOP=1 -c "CREATE DATABASE $SCRATCH"
-cat "$MIGRATIONS"/0001_init.sql "$MIGRATIONS"/0002_sessions.sql \
-    | psql -d "$SCRATCH" -q -v ON_ERROR_STOP=1
+if [ -z "$DATABASE" ]; then
+  command -v docker > /dev/null || {
+    echo "set SQLCHECK_DATABASE to a PostgreSQL 16+ URL, or install docker to start one" >&2
+    exit 1
+  }
+  CONTAINER="kalam-sqlcheck-$$"
+  PORT=$(( 16432 + (RANDOM % 1000) ))
+  echo "==> starting a throwaway postgres on :$PORT"
+  docker run -d --rm --name "$CONTAINER" -p "$PORT:5432" \
+    -e POSTGRES_PASSWORD=sqlcheck -e POSTGRES_DB=sqlcheck postgres:16-alpine > /dev/null
+  DATABASE="postgres://postgres:sqlcheck@127.0.0.1:$PORT/sqlcheck"
+  for _ in $(seq 60); do
+    docker exec "$CONTAINER" pg_isready -U postgres -d sqlcheck > /dev/null 2>&1 && break
+    sleep 1
+  done
+fi
 
-# Parameter types are left to Postgres. Every statement writes its placeholders as ($1)::type, so
-# inference has everything it needs -- and one that stopped doing that would be ambiguous to the
-# server too, which is worth failing on.
-# It walks INTO TASK GROUPS: the generator folds each run of tasks sharing a condition into a group,
-# and a walker that reads only the top-level list misses the grouped statements.
-echo "==> preparing every query in workflows/*.json"
-python3 - workflows/*.json <<'PY' | psql -d "$SCRATCH" -q -v ON_ERROR_STOP=1
-import json, sys
+# The migrations wrap themselves in BEGIN/COMMIT so `soma bootstrap` applies each atomically; the
+# scratch schema is built inside one transaction that is always rolled back, which a COMMIT would
+# end. Soma's own check-sql.sh strips them the same way, and neither touches the shipped files.
+for f in "$MIGRATIONS"/*.sql; do
+  grep -vxE '\s*(BEGIN|COMMIT);\s*' "$f" > "$SCHEMA/$(basename "$f")"
+done
 
-def statements(tasks):
-    """Every query in the list, descending into task groups."""
-    for task in tasks:
-        yield from statements(task.get("tasks", []))
-        query = task.get("function", {}).get("input", {}).get("query")
-        if query:
-            yield task["id"], query
+echo "==> preparing every statement in the set, as the kalam role"
+orion-server sql check . \
+  --schema "$SCHEMA" \
+  --database "$DATABASE" \
+  --role kalam-db=kalam
 
-n = 0
-for path in sys.argv[1:]:
-    doc = json.load(open(path))
-    for task_id, query in statements(doc.get("tasks", [])):
-        n += 1
-        name = f"chk_{doc['workflow_id']}_{task_id}".replace("-", "_").replace(".", "_")
-        print(rf"\echo '  {doc['workflow_id']} / {task_id}'")
-        print(f"PREPARE {name} AS {query};")
-print(rf"\echo '-- {n} statements'")
-PY
-
-# The other half of "this statement will work": a role can PREPARE a statement it would be refused
-# at execution time, so check that the columns a match writes are the columns it is granted.
-echo "==> the kalam role's grants cover what a match writes"
-psql -d "$SCRATCH" -q -v ON_ERROR_STOP=1 <<'SQL'
-DO $$
-DECLARE missing text;
+# ---------------------------------------------------------------- the grants this role must NOT have
+echo "==> the kalam role cannot reach what is Soma's"
+psql "$DATABASE" -q -v ON_ERROR_STOP=1 > /dev/null <<SQL
+BEGIN;
+$(cat "$SCHEMA"/*.sql)
+DO \$\$
 BEGIN
-    SELECT string_agg(c, ', ') INTO missing FROM unnest(ARRAY[
-        'status','claim_token','lease_expires_at','lapses','refusals','reason','turns',
-        'played_ms','engine_digest_played','orion_version','replay_key','played_at',
-        'fault_reason','fault_seat','closed_at']) AS c
-     WHERE NOT has_column_privilege('kalam', 'matches', c, 'UPDATE');
-    IF missing IS NOT NULL THEN
-        RAISE EXCEPTION 'the kalam role cannot UPDATE matches.%', missing;
-    END IF;
-    SELECT string_agg(c, ', ') INTO missing FROM unnest(ARRAY['rank','score','strikes']) AS c
-     WHERE NOT has_column_privilege('kalam', 'match_seats', c, 'UPDATE');
-    IF missing IS NOT NULL THEN
-        RAISE EXCEPTION 'the kalam role cannot UPDATE match_seats.%', missing;
-    END IF;
     IF has_column_privilege('kalam', 'matches', 'rated_at', 'UPDATE') THEN
         RAISE EXCEPTION 'the kalam role can write matches.rated_at -- counting is Soma''s';
-    END IF;
-    -- The roster clock reads model_versions, and only the columns it needs. The absences are
-    -- the point: a replica that can name a model still cannot see what class it is in, what it
-    -- was measured at, or why it was refused.
-    SELECT string_agg(c, ', ') INTO missing
-      FROM unnest(ARRAY['id','status','manifest','artifact_key','weights_hash','created_at']) AS c
-     WHERE NOT has_column_privilege('kalam', 'model_versions', c, 'SELECT');
-    IF missing IS NOT NULL THEN
-        RAISE EXCEPTION 'the kalam role cannot SELECT model_versions.%', missing;
-    END IF;
-    SELECT string_agg(c, ', ') INTO missing
-      FROM unnest(ARRAY['weight_class','param_count','infer_us','reject_reason',
-                        'admit_token','size_bytes']) AS c
-     WHERE has_column_privilege('kalam', 'model_versions', c, 'SELECT');
-    IF missing IS NOT NULL THEN
-        RAISE EXCEPTION 'the kalam role can read a competitive decision: model_versions.%', missing;
     END IF;
     IF has_table_privilege('kalam', 'ratings', 'SELECT') THEN
         RAISE EXCEPTION 'the kalam role can read ratings';
     END IF;
-END $$;
+    IF EXISTS (SELECT 1 FROM unnest(ARRAY['status', 'reject_reason', 'admit_token']) c
+                WHERE has_column_privilege('kalam', 'model_versions', c, 'UPDATE')) THEN
+        RAISE EXCEPTION 'the kalam role can write a competitive decision on model_versions';
+    END IF;
+END
+\$\$;
+ROLLBACK;
 SQL
 
-echo "==> all shipped SQL parses and plans, and the role can write what it writes"
+echo "==> all shipped SQL parses and plans as kalam, and that role reaches nothing of Soma's"

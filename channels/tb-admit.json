@@ -1,0 +1,15 @@
+{
+  "channel_id": "tb-admit",
+  "name": "tb-admit",
+  "tags": ["pkg:kalam"],
+  "channel_type": "async",
+  "protocol": "cron",
+  "workflow_id": "tb-admit-run",
+  "transport_config": {
+    "schedule": "*/10 * * * * *",
+    "timezone": "UTC",
+    "misfire_policy": "skip",
+    "concurrency": { "policy": "forbid", "key": "admit" }
+  },
+  "config": { "$from": "constants.admit_channel_config" }
+}

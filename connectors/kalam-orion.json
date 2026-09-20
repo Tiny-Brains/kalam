@@ -5,13 +5,14 @@
   "tags": ["pkg:kalam"],
   "config": {
     "type": "http",
-    "url": "http://127.0.0.1:8080/api/v1/admin",
+    "url": "env://KALAM_ORION_ADMIN",
     "headers": {
       "content-type": "application/json",
       "user-agent": "kalam-roster",
       "authorization": "env://ORION_ADMIN_BEARER"
     },
     "retry": { "max_retries": 0, "retry_delay_ms": 0 },
-    "timeout_ms": 15000
+    "timeout_ms": 15000,
+    "allow_private_urls": true
   }
 }

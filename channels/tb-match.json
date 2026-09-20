@@ -1,0 +1,15 @@
+{
+  "channel_id": "tb-match",
+  "name": "tb-match",
+  "tags": ["pkg:kalam"],
+  "channel_type": "async",
+  "protocol": "cron",
+  "workflow_id": "tb-match-run",
+  "transport_config": {
+    "schedule": "*/5 * * * * *",
+    "timezone": "UTC",
+    "misfire_policy": "skip",
+    "concurrency": { "policy": "forbid", "key": "match", "slots": 4 }
+  },
+  "config": { "$from": "constants.match_channel_config" }
+}

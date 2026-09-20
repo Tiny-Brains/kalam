@@ -1,176 +1,106 @@
 #!/usr/bin/env sh
-# Load (or reload) the Kalam package into a running orion-server.
+# Apply the Kalam package into a running orion-server, from this checkout.
 #
-#   kalam/scripts/load-package.sh          # ORION_ADMIN selects the replica
+#   kalam/scripts/load-package.sh                      # ORION_ADMIN selects the replica
+#   KALAM_ROLE=admit kalam/scripts/load-package.sh     # an admitting runner's channels
+#   kalam/scripts/load-package.sh --prune              # ...and retire what this version dropped
+#   kalam/scripts/load-package.sh --compile-only -o F  # shape and compile; apply nothing
 #
-# The same shape as soma/scripts/load-package.sh -- the two are deliberately alike, and
-# a difference between them should mean something. `orion-server compile` resolves the set --
-# including the `$from` constants in shared/kalam.json, which the admin API does not accept -- into
-# ONE promotion artifact, and `orion-server package apply` stages it, activates in dependency order
-# and reloads the engine once. That is idempotent by content: an unchanged package is a no-op, and
-# nothing is ever briefly absent.
+# `--compile-only` is what docker/entrypoint.sh calls at boot. THE ROLE'S SHAPE IS ONE RULE AND THIS
+# IS WHERE IT LIVES: which channels a role gets, and how many slots the match channel has. A node
+# and an operator must shape a package identically, and the way to guarantee that is not to write
+# the rule twice.
+#
+# A RUNNER DOES NOT NEED THIS TO BOOT. Its own `[packages] apply` compiles and applies the package
+# in the image (docker/runner.toml.tmpl, entrypoint.sh), holding /readyz until it is serving. This
+# script is the two things that path is not: applying a WORKING COPY into a node already up, and
+# `--prune`, which the boot path deliberately does not do.
+#
+# The same shape as soma/scripts/load-package.sh -- the two are deliberately alike, and a
+# difference between them should mean something.
 #
 # ONE REPLICA PER RUN. Each replica is its own Orion with its own state database and there is no
-# epoch bus between them, so each node runs this against itself: docker/entrypoint.sh does, at boot.
+# epoch bus between them, so each node applies against itself.
+#
+# WHICH CHANNELS: a node's role decides. `match` gets the match channel and the roster, `admit`
+# gets tb-admit alone, and `KALAM_MATCH_LANES` is the match channel's `slots` -- one channel bounded
+# at N, where before Orion 1.9.0 it was N cloned channels a generator wrote.
+#
+# WHAT THIS SCRIPT NO LONGER DOES, because Orion 1.9.0 does it: a staged copy of the set (connector
+# URLs and booleans are references in the committed definitions now, #338), a content-derived
+# version (`--version content`, #339), patching in signatures (`--signatures`, #340), a sweep that
+# deleted what the artifact did not carry (`--prune`, #341), and reading /health back to see
+# whether the apply really served (`apply` fails on a quarantined member itself, #342).
 #
 # Environment:
-#   ORION_ADMIN                admin API base (default http://127.0.0.1:8080/api/v1/admin)
-#   ORION_ADMIN_API_KEY        admin credential, when admin_auth is enabled
-#   KALAM_ALLOW_PRIVATE_URLS   1 to set allow_private_urls on every connector but kalam-orion
-#   KALAM_API_URL              Soma's base URL, for the kalam-api connector
-#   KALAM_ORION_ADMIN          this node's own admin API, for the kalam-orion connector
-#   R2_ENDPOINT                the replay store, for the kalam-blobs-put connector
-#   PLUGIN_SIG_DIR             detached Ed25519 signatures, named <component>.sig
-#   KALAM_ROLE                 admit loads tb-admit alone; anything else, the match lanes and roster
-#   KALAM_MATCH_LANES          how many match lanes to load (entrypoint.sh sets both)
+#   ORION_ADMIN             admin API base (default http://127.0.0.1:8080/api/v1/admin)
+#   ORION_ADMIN_API_KEY     admin credential, when admin_auth is enabled
+#   PLUGIN_SIG_DIR          detached Ed25519 signatures, named <component>.sig or <plugin id>.sig
+#   KALAM_ROLE              match (default) or admit
+#   KALAM_MATCH_LANES       matches at once, as the match channel's slots (unset keeps the shipped max)
+#
+# Everything a deployment varies is read by the definitions and the instance config: the platform's
+# URL, this node's admin API, the replay endpoint and `allow_private_urls` as references on the
+# connectors, and the runner key and engine digest as [vars].
 set -eu
 
 ADMIN="${ORION_ADMIN:-http://127.0.0.1:8080/api/v1/admin}"
 SERVER="${ADMIN%/api/v1/admin}"
-STAGE="${TMPDIR:-/tmp}/kalam-pkg.$$"
-ARTIFACT="$STAGE.json"
-trap 'rm -rf "$STAGE" "$ARTIFACT" "$STAGE.keep"' EXIT
+ARTIFACT="${TMPDIR:-/tmp}/kalam-pkg.$$.json"
 
 cd "$(dirname "$0")/.."
 
-AUTH=""
-[ -n "${ORION_ADMIN_API_KEY:-}" ] && AUTH="Authorization: Bearer ${ORION_ADMIN_API_KEY}"
-curl_admin() {
-  if [ -n "$AUTH" ]; then curl -sS -H "$AUTH" "$@"; else curl -sS "$@"; fi
-}
-
-# THE DEPLOYMENT'S CONNECTOR SETTINGS, applied to a staged copy rather than committed. An http
-# connector's `url` is SCHEME-CHECKED and `allow_private_urls` is a BOOLEAN, and both are validated
-# by every offline gate -- lint, clippy, compile, package lint -- BEFORE a `var://` or `env://`
-# reference would resolve. That is why neither can be a reference and both are applied here: the
-# committed package stays lintable and carries no deployment's addresses. A storage connector's
-# `endpoint` takes env:// happily, which is why kalam-blobs can and these cannot.
-PRIVATE=$([ "${KALAM_ALLOW_PRIVATE_URLS:-0}" = "1" ] && echo true || echo false)
-
-# `kalam-api` IS THE ONE THAT MATTERS OFF-SITE. The others address things inside the deployment, so
-# a private address is the normal case for them; this one addresses the platform from wherever the
-# runner is, and a runner that will follow a redirect into a private network is the wrong side of
-# Orion's S6 posture to be on. Leave KALAM_ALLOW_PRIVATE_URLS unset anywhere the runner is not on
-# the compose bridge -- web's scripts/check/configs.sh asserts exactly that.
-
-# EXCEPT `kalam-orion`, WHICH IS ALWAYS PRIVATE AND MUST BE. It is THIS NODE'S OWN admin API -- the
-# roster clock registering and activating a model on the machine it is already running on -- and on
-# a standalone runner that address is `127.0.0.1:8080`, which Orion's guard counts as private
-# (127/8 is loopback, ssrf.rs). So one variable for all six cannot express a runner's posture: it
-# needs `kalam-api` refusing private addresses AND `kalam-orion` permitted one, at the same time.
-# Driving this off KALAM_ALLOW_PRIVATE_URLS would mean an off-site runner whose roster clock cannot
-# reach itself, and a roster that never catches up is a runner that refuses every seat.
-#
-# The guard is about egress to somewhere else. A node calling itself is not that.
-
-# THE LANES THIS NODE PLAYS. entrypoint.sh sets KALAM_MATCH_LANES from RUNNER_CRON_WORKERS and sizes
-# Orion's worker pool at one more, for the roster; a lane above the count is left out of the set, so
-# the pool can never be filled by matches alone. Unset loads every lane the package ships.
-#
-# AND THE ROLE. An admitting runner (KALAM_ROLE=admit, lanes 0) loads tb-admit and no match lane and
-# no roster; any other loads no tb-admit, so a match runner never admits between matches. The
-# workflows load either way -- a workflow with no channel never runs.
-DROP=""
-if [ -n "${KALAM_MATCH_LANES:-}" ]; then
-  for f in channels/tb-match-*.json; do
-    n=${f#channels/tb-match-}
-    n=${n%.json}
-    if [ "$n" -gt "$KALAM_MATCH_LANES" ]; then DROP="$DROP --drop=$f"; fi
-  done
-fi
-if [ "${KALAM_ROLE:-match}" = "admit" ]; then
-  DROP="$DROP --drop=channels/tb-roster.json"
-else
-  DROP="$DROP --drop=channels/tb-admit.json"
-fi
-
-echo "==> staging the set"
-# $DROP is deliberately unquoted: it is zero or more whole arguments, none with a space in it.
-# shellcheck disable=SC2086
-VERSION=$(python3 scripts/stage-set.py . "$STAGE" $DROP \
-  "kalam-db=allow_private_urls=$PRIVATE" \
-  "kalam-models=allow_private_urls=$PRIVATE" \
-  "kalam-blobs=allow_private_urls=$PRIVATE" \
-  "kalam-blobs-put=allow_private_urls=$PRIVATE" \
-  "kalam-blobs-put=url=${R2_ENDPOINT:-}" \
-  "kalam-orion=allow_private_urls=true" \
-  "kalam-orion=url=${KALAM_ORION_ADMIN:-$ADMIN}" \
-  "kalam-api=allow_private_urls=$PRIVATE" \
-  "kalam-api=url=${KALAM_API_URL:-http://soma:8080}")
-
-echo "==> compiling kalam@$VERSION"
-if ! out=$(orion-server compile "$STAGE" --name kalam --version "$VERSION" -o "$ARTIFACT" 2>&1); then
-  printf '%s\n' "$out" >&2
-  exit 1
-fi
-
-# THE SIGNATURE, attached after compile: `package.content_hash` projects a plugin through its
-# manifest, digest and tags only, so adding one does not invalidate the artifact. A signature
-# belongs to whoever holds the trust key, never to the package -- which for the cartridge is not
-# even this repository's to hold, since the component comes from ants' release.
-if [ -n "${PLUGIN_SIG_DIR:-}" ] || [ -d plugins ]; then
-  echo "==> attaching plugin signatures"
-  SIG_DIR="${PLUGIN_SIG_DIR:-}" python3 -c '
-import json, os, pathlib, sys
-art = pathlib.Path(sys.argv[1])
-doc = json.loads(art.read_text())
-sig_dir = os.environ.get("SIG_DIR") or ""
-for entry in doc.get("plugins", []):
-    name = entry.get("plugin_id") or ""
-    manifest = entry.get("manifest") or {}
-    component = manifest.get("component") if isinstance(manifest, dict) else None
-    if not component:
-        continue
-    for cand in ([pathlib.Path(sig_dir) / f"{component}.sig"] if sig_dir else []) + \
-                list(pathlib.Path("plugins").glob(f"*/{component}.sig")):
-        if cand.is_file():
-            entry["signature"] = cand.read_text().strip()
-            print(f"    {name}  <- {cand}")
-            break
-    else:
-        print(f"    {name}  (unsigned)")
-art.write_text(json.dumps(doc, indent=2) + "\n")
-' "$ARTIFACT"
-fi
-
-# A channel the package no longer ships would otherwise stay active and hold its schedule: `apply`
-# adds and updates, it does not remove. This deletes only what the artifact does not carry.
-echo "==> retiring objects this package no longer ships"
-python3 -c '
-import json, sys
-a = json.load(open(sys.argv[1]))
-for kind, key in (("channels", "channel_id"), ("workflows", "workflow_id"),
-                  ("connectors", "id"), ("plugins", "plugin_id")):
-    for e in a.get(kind, []):
-        print(kind + "/" + e[key])
-' "$ARTIFACT" > "$STAGE.keep"
-
-for kind in channels workflows connectors plugins; do
-  case "$kind" in
-    channels)   key=channel_id ;;
-    workflows)  key=workflow_id ;;
-    connectors) key=id ;;
-    plugins)    key=plugin_id ;;
+PRUNE=""
+COMPILE_ONLY=0
+OUT=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --prune)        PRUNE="--prune" ;;
+    --prune=delete) PRUNE="--prune=delete" ;;
+    --compile-only) COMPILE_ONLY=1 ;;
+    -o)             shift; OUT="${1:-}" ;;
+    *) echo "usage: load-package.sh [--prune | --prune=delete] [--compile-only -o <file>]" >&2; exit 2 ;;
   esac
-  # An artifact with NONE of a kind was built without that kind's source, so it cannot say which of
-  # them should exist and must not retire any. THIS PACKAGE IS WHY THE GUARD EXISTS: the cartridge
-  # comes from ants' release, so a checkout with no plugins/ compiles to an artifact with no
-  # plugins -- and an unguarded sweep would delete tb.ants, which is the whole engine.
-  grep -q "^$kind/" "$STAGE.keep" || continue
-  for id in $(curl_admin "$ADMIN/$kind?tag=pkg:kalam&limit=500" \
-      | python3 -c "import json,sys; [print(o['$key']) for o in json.load(sys.stdin)['data']]"); do
-    grep -qx "$kind/$id" "$STAGE.keep" && continue
-    curl_admin -X DELETE "$ADMIN/$kind/$id" -o /dev/null || true
-    echo "    retired $kind/$id"
-  done
+  shift
 done
+[ "$COMPILE_ONLY" = 1 ] && [ -z "$OUT" ] && { echo "--compile-only needs -o <file>" >&2; exit 2; }
+[ -n "$OUT" ] && ARTIFACT="$OUT"
 
-echo "==> applying"
+# THIS ROLE'S CHANNELS, shaped into a copy -- the checkout is never written to. The same two facts
+# the entrypoint applies: which channels this node runs, and how many matches at once.
+ROLE="${KALAM_ROLE:-match}"
+SET="${TMPDIR:-/tmp}/kalam-set.$$"
+# The artifact survives when the caller named it; the working copy never does.
+if [ "$COMPILE_ONLY" = 1 ]; then
+  trap 'rm -rf "$SET"' EXIT
+else
+  trap 'rm -rf "$SET"; rm -f "$ARTIFACT"' EXIT
+fi
+mkdir -p "$SET"
+cp -R . "$SET"/
+rm -rf "$SET/scripts" "$SET/docker"
+
+echo "==> shaping the package for a $ROLE runner"
+if [ "$ROLE" = admit ]; then
+  rm -f "$SET/channels/tb-match.json" "$SET/channels/tb-roster.json"
+else
+  rm -f "$SET/channels/tb-admit.json"
+  if [ -n "${KALAM_MATCH_LANES:-}" ]; then
+    # `slots` is a literal in the channel, because Orion takes lock cardinality as an authoring
+    # decision. The shipped value is the maximum; this is the number THIS node plays.
+    ch="$SET/channels/tb-match.json"
+    sed "s/\"slots\": [0-9][0-9]*/\"slots\": $KALAM_MATCH_LANES/" "$ch" > "$ch.tmp" && mv "$ch.tmp" "$ch"
+    grep -q "\"slots\": $KALAM_MATCH_LANES" "$ch" || {
+      echo "could not set the match channel to $KALAM_MATCH_LANES slot(s)" >&2; exit 1; }
+  fi
+fi
+
+echo "==> compiling"
+orion-server compile "$SET" --version content -o "$ARTIFACT" | tail -1
+[ "$COMPILE_ONLY" = 1 ] && exit 0
+
+echo "==> applying${PRUNE:+ (with $PRUNE)}"
 ORION_ADMIN_TOKEN="${ORION_ADMIN_API_KEY:-}" \
-  orion-server package apply -s "$SERVER" -f "$ARTIFACT" | tail -1
-
-echo "==> health"
-# Through curl_admin: /health's detail -- the plugin list, the quarantined channels -- is gated on
-# a valid admin key. Unauthenticated it still answers 200 and omits them, so this check would
-# quietly report nothing wrong on a node where something is.
-curl_admin "$SERVER/health" | tr ',' '\n' | grep -E 'quarantined|failed_to_load' || true
+  orion-server package apply -s "$SERVER" -f "$ARTIFACT" \
+    ${PLUGIN_SIG_DIR:+--signatures "$PLUGIN_SIG_DIR"} \
+    ${PRUNE:+$PRUNE}

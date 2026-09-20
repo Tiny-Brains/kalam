@@ -88,29 +88,39 @@ services:
       # SigV4 signs the host, so a URL signed for one address and sent to another is
       # `SignatureDoesNotMatch`, a 403 that names neither setting.
       #
-      # It goes in as R2_ENDPOINT because that is the name `kalam-blobs-put` is staged from. The
-      # matching R2_ACCESS_KEY and R2_SECRET_KEY are EMPTY, so `kalam-blobs` -- the connector that
-      # would sign for itself -- has nothing to sign with. A runner that could sign its own replay
-      # URL would be a runner the gate's claim-token check does not bind.
-      R2_ENDPOINT: ${RUNNER_BLOB_ENDPOINT:?the replay bucket endpoint Soma signs for}
+      # `kalam-blobs-put` names it directly, as `env://RUNNER_BLOB_ENDPOINT` -- the same name Soma
+      # signs under, so the two settings that must be equal now share a name instead of being
+      # renamed to R2_ENDPOINT on the way in. R2_ACCESS_KEY and R2_SECRET_KEY stay EMPTY, so
+      # `kalam-blobs` -- the connector that would sign for itself -- has nothing to sign with. A
+      # runner that could sign its own replay URL would be one the gate's claim-token check does
+      # not bind.
+      RUNNER_BLOB_ENDPOINT: ${RUNNER_BLOB_ENDPOINT:?the replay bucket endpoint Soma signs for}
 
       # ---- what this machine does NOT hold, which is the point ------------------------------
       #
-      # EMPTY, NOT ABSENT, AND THE DIFFERENCE IS THE WHOLE NODE. An unresolvable `env://` makes Orion
-      # skip that connector, and a WORKFLOW that references a skipped connector CANNOT ACTIVATE --
-      # `package apply` stops at the first one and leaves every channel after it a DRAFT, and a draft
-      # cron channel holds no schedule. Set to the empty string they RESOLVE, so `kalam-db` and
-      # `kalam-blobs` exist, load, and are never reached: every task that names them is gated on
-      # `mode != "api"`. ALL FOUR, because a connector needs EVERY `env://` it names to resolve.
-      # When the package's `db` branch goes (CLAUDE.md, *Removing db mode*), these four lines go
-      # with it.
-      KALAM_DB_URL: ""
-      R2_BUCKET: ""
-      R2_ACCESS_KEY: ""
-      R2_SECRET_KEY: ""
+      # PRESENT AND WELL-FORMED, NOT ABSENT AND NOT EMPTY, AND THE DIFFERENCE IS THE WHOLE NODE.
+      # An unresolvable `env://` makes Orion SKIP that connector, and a WORKFLOW that references a
+      # skipped connector CANNOT ACTIVATE -- `package apply` stops at it and the node exits.
+      #
+      # EMPTY USED TO BE ENOUGH; SINCE ORION 1.9.0 IT IS NOT. A connector's endpoint is scheme-checked
+      # AFTER its references resolve, so `""` is now refused ("uses no scheme") exactly as `ftp://`
+      # would be, and the connector is skipped again. These are therefore well-formed URLs that
+      # route nowhere -- `.invalid` is reserved by RFC 2606 and never resolves -- so `kalam-db` and
+      # `kalam-blobs` load, and are never reached: every task naming them is gated on `mode != "api"`.
+      # ALL FIVE, because a connector needs EVERY `env://` it names. When the package's `db` branch
+      # goes (CLAUDE.md, *Removing db mode*), these five lines go with it.
+      KALAM_DB_URL: postgres://unused@db-mode-is-off.invalid/unused
+      R2_ENDPOINT: http://db-mode-is-off.invalid
+      R2_BUCKET: unused
+      R2_ACCESS_KEY: unused
+      R2_SECRET_KEY: unused
 
       # ---- how the package gets here -------------------------------------------------------
       PLUGIN_SIG_DIR: /sig
+      # This node's OWN admin API, which the roster clock registers models through. `kalam-orion`
+      # names it as `env://KALAM_ORION_ADMIN`, and that connector is the one always permitted a
+      # private address -- it is this container calling itself.
+      KALAM_ORION_ADMIN: ${KALAM_ORION_ADMIN:-http://127.0.0.1:8080/api/v1/admin}
       TB_TRUST_PUBLIC_KEY: ${TB_TRUST_PUBLIC_KEY:?copy it from the deployment}
       # THIS NODE'S OWN ADMIN PLANE, and nothing else's. It authorises the package load and the roster
       # clock's calls to 127.0.0.1, both of which stay on this machine. It is NOT the deployment's
@@ -128,7 +138,7 @@ services:
       # refuses a runner that carries it with a public Soma URL.
       KALAM_ALLOW_PRIVATE_URLS: ${RUNNER_ALLOW_PRIVATE_URLS:-}
 
-      ORION_VERSION: ${ORION_VERSION:-1.8.1}
+      ORION_VERSION: ${ORION_VERSION:-1.9.0}
       # A draining match is worth waiting for: it is a real result that is otherwise replayed from
       # scratch by whoever claims the row next.
       ORION_SHUTDOWN_DRAIN_SECS: ${RUNNER_SHUTDOWN_DRAIN_SECS:-5}

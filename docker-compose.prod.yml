@@ -79,7 +79,7 @@ services:
       ORION_LOGGING__FORMAT: json
       RUST_LOG: ${ORION_RUST_LOG:-info,dataflow_rs::engine::workflow_executor=warn,dataflow_rs::engine::functions::filter=warn,orion::server::observability=warn}
 
-      ORION_VERSION: ${ORION_VERSION:-1.8.1}
+      ORION_VERSION: ${ORION_VERSION:-1.9.0}
       ORION_SHUTDOWN_DRAIN_SECS: ${RUNNER_SHUTDOWN_DRAIN_SECS:-5}
       ORION_SHUTDOWN_FORCE_SECS: ${RUNNER_SHUTDOWN_FORCE_SECS:-2700}
       ORION_CRON_SHUTDOWN_SECS: ${RUNNER_CRON_SHUTDOWN_SECS:-2700}

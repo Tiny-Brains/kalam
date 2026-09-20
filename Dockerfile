@@ -26,13 +26,12 @@
 # SIGNATURES ARE NOT IN HERE. The engine's signature belongs to whoever holds the deployment's trust
 # key; a runner mounts that deployment's signatures directory at /sig.
 #
-# EVERY STAGE THAT BUILDS RUNS ON THE BUILD PLATFORM. The cartridge, the generated declarations and
-# the orion-server download are the same bytes for every target, so the amd64 and arm64 images carry
-# identical packages and one signature verifies on both. Only the runtime stage is per platform.
+# EVERY STAGE THAT BUILDS RUNS ON THE BUILD PLATFORM. The cartridge and the orion-server download
+# are the same bytes for every target, so the amd64 and arm64 images carry identical packages and
+# one signature verifies on both. Only the runtime stage is per platform.
 
 ARG ANTS_RELEASE=
-ARG ORION_VERSION=1.8.1
-ARG PYTHON_VERSION=3.12
+ARG ORION_VERSION=1.9.0
 ARG CURL_VERSION=8.22.0
 ARG DEBIAN_VERSION=bookworm-slim
 
@@ -65,16 +64,6 @@ RUN set -eu; \
 FROM scratch AS ants
 COPY --from=ants-release /artifacts/ /
 
-# ---- the channel and its workflow --------------------------------------------
-#
-# `scripts/gen-kalam.py` writes both. The match's statements live readable in the generator and are
-# inlined as single-line JSON strings, because SQL written that way by hand is unreviewable --
-# `scripts/check-sql.sh` checks the SHIPPED copy against a real Postgres for exactly that reason.
-FROM --platform=$BUILDPLATFORM python:${PYTHON_VERSION}-alpine AS declarations
-WORKDIR /src
-COPY scripts/gen-kalam.py ./scripts/
-RUN mkdir -p channels workflows && python3 scripts/gen-kalam.py
-
 # ---- orion-server, for the target platform -----------------------------------
 #
 # The upstream release, verified against its published checksum. Fetched on the build platform -- it
@@ -105,10 +94,10 @@ LABEL org.opencontainers.image.title="kalam" \
       org.opencontainers.image.source="https://github.com/Tiny-Brains/kalam" \
       org.opencontainers.image.description="a TinyBrains runner: orion-server with the Kalam package and the Ants engine, playing rated matches through Soma's gate"
 
-# curl for the healthcheck and the self-load; python3 because load-package.sh stages the set with it
-# (stdlib only -- the full interpreter, because python3-minimal ships without `json`).
+# curl for the healthcheck, and nothing else. There is no python3: the package is authored JSON,
+# `orion-server compile` resolves it, and the node applies it to itself.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates curl python3 \
+ && apt-get install -y --no-install-recommends ca-certificates curl \
  && rm -rf /var/lib/apt/lists/* \
  && useradd --system --uid 10001 --create-home --shell /usr/sbin/nologin orion \
  # `models` EXISTS IN THE IMAGE so that a named volume mounted there inherits its ownership. Docker
@@ -123,9 +112,13 @@ COPY docker/runner.toml.tmpl /etc/orion/runner.toml.tmpl
 
 COPY connectors/             /pkg/kalam/connectors/
 COPY shared/                 /pkg/kalam/shared/
-COPY scripts/load-package.sh scripts/stage-set.py /pkg/kalam/scripts/
-COPY --from=declarations /src/channels/  /pkg/kalam/channels/
-COPY --from=declarations /src/workflows/ /pkg/kalam/workflows/
+COPY scripts/load-package.sh /pkg/kalam/scripts/
+# THE WHOLE PACKAGE, as authored -- every channel, every workflow, every statement, at the shipped
+# slot maximum. It is what an offline `orion-server clippy /pkg/kalam` in this image reads, and
+# entrypoint.sh copies it aside and shapes THAT for the node's role rather than writing here.
+COPY channels/  /pkg/kalam/channels/
+COPY workflows/ /pkg/kalam/workflows/
+COPY sql/       /pkg/kalam/sql/
 # The engine, its two plugin manifests and the cartridge's registration manifest, from the one ants
 # release this image was built with.
 COPY --from=ants /tb-ants.wasm /plugin.json /cartridge.json /plugin.toml /pkg/kalam/plugins/tb-ants/
@@ -133,8 +126,9 @@ COPY --from=ants /tb-ants.wasm /plugin.json /cartridge.json /plugin.toml /pkg/ka
 USER orion
 EXPOSE 8080
 
-# 200 once startup has finished and the state database answers. A package that failed to load does
-# not fail this; the entrypoint's self-load stops the node instead.
+# 200 once startup has finished, the state database answers AND this node's package is serving:
+# `[packages] apply` holds /readyz at 503 (`components.packages: "applying"`) until it is, and stops
+# the node if it cannot be. So this is now a real readiness check and not just "the process is up".
 HEALTHCHECK --interval=10s --timeout=3s --start-period=30s --retries=5 \
   CMD curl -fsS http://127.0.0.1:8080/readyz > /dev/null || exit 1
 
