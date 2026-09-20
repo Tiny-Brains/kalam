@@ -1,8 +1,7 @@
-# The generated files this image produces for itself, and the engine it takes from the cartridge's
-# own release. Copying either in would let a stale local copy shadow the one this Dockerfile makes --
-# which for the engine means the ladder plays a component ants does not ship.
-channels/
-workflows/
+# The engine, which this image takes from the cartridge's own release. Copying a local build in
+# would let it shadow the one the Dockerfile fetches -- which means the ladder plays a component
+# ants does not ship. `channels/` and `workflows/` are SOURCE now, not build output, so the
+# Dockerfile copies them from the context and they must not be excluded.
 plugins/
 
 .git/
