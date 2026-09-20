@@ -5,6 +5,7 @@
 #   cp .env.prod.example .env.prod
 #   docker compose -f docker-compose.prod.yml --env-file .env.prod pull
 #   docker compose -f docker-compose.prod.yml --env-file .env.prod up -d
+#   docker compose -f docker-compose.prod.yml --env-file .env.prod --profile admit up -d   # the admitter
 #
 # WHAT DIFFERS FROM docker-compose.yml, and why each one is a production setting:
 #
@@ -17,7 +18,9 @@
 #   one endpoint    R2_S3_ENDPOINT is both the models bucket and the replay store, as the deployment
 #                   signs them
 #
-# docker-compose.yml's header says what the service does and why it holds no platform credential.
+# docker-compose.yml's header says what the service does and why it holds no platform credential, and
+# what `admit` is: the same runner as the deployment's admitting runner, under `--profile admit`. Soma
+# runs no model, so production admits nothing until one machine runs it.
 name: tinybrains-runner-prod
 
 services:
@@ -103,5 +106,26 @@ services:
           cpus: ${RUNNER_CPUS:-0}
           memory: ${RUNNER_MEMORY:-0}
 
+  # THE DEPLOYMENT'S ADMITTING RUNNER: docker-compose.yml says why it is a second service.
+  admit:
+    extends: runner
+    profiles: [admit]
+    environment:
+      RUNNER_ROLE: admit
+      RUNNER_LABEL: ${RUNNER_LABEL:?how this machine appears on the Runners page}-admit
+      ORION_SHUTDOWN_FORCE_SECS: "630"
+      ORION_CRON_SHUTDOWN_SECS: "630"
+    volumes:
+      - admit-models:/var/lib/orion/models
+    ports: !override
+      - "127.0.0.1:${ADMIT_ADMIN_PORT:-8091}:8080"
+    stop_grace_period: 660s
+    deploy:
+      resources:
+        limits:
+          cpus: ${ADMIT_CPUS:-2}
+          memory: ${ADMIT_MEMORY:-0}
+
 volumes:
   runner-models:
+  admit-models:

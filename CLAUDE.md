@@ -3,10 +3,13 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 `kalam` ships **no server code**. It is an Orion **1.8.1** package, loaded at boot into the
-orion-server its runner image carries. It has two clocks. **`tb-match`** is a set of match lanes that
-all run `tb-match-run`: claim ONE queued row, then `observe` → one `model_infer` per live seat →
-`step` until the engine stops returning views, then finish the row in place. **`tb-roster`**
+orion-server its runner image carries. It has three clocks. **`tb-match`** is a set of match lanes
+that all run `tb-match-run`: claim ONE queued row, then `observe` → one `model_infer` per live seat
+→ `step` until the engine stops returning views, then finish the row in place. **`tb-roster`**
 registers, admits and activates on this node every version the ladder says is verified or active.
+**`tb-admit`** is an admitting runner's only clock (`RUNNER_ROLE=admit`): claim one submission Soma
+prepared, register it, let Orion admit it, play it over the reference observations, delete it and
+report. Soma runs no model and judges the report.
 `scripts/gen-kalam.py` is the source. `workflows/` and `channels/` are its gitignored output, which
 the Dockerfile regenerates into the image. Kalam owns **execution only**. Soma owns the schema, the
 public routes and every competitive decision, ants owns the rules, and Orion runs the models. The
@@ -56,6 +59,17 @@ identically, not just recorded.
   gives one match in flight per lane. Their shared `config` is `shared/kalam.json`. That file is a
   shared document the admin API does not accept, so `load-package.sh` runs `orion-server compile`
   and then `package apply`.
+- **A runner has one role** (`RUNNER_ROLE`, `entrypoint.sh`). `match` loads the lanes and the roster
+  and drops `tb-admit`; `admit` loads `tb-admit` alone, one cron worker, so an admission never shares
+  a node with a match and its probe is never timed under a match's load. `load-package.sh` does the
+  dropping; the workflows load either way.
+- **An admitting runner executes and never decides.** It registers the registration Soma rebuilt,
+  never the competitor's manifest; sends Orion's admission record and stats as they came, and the
+  probe's tally; and judges nothing, not a stage, a budget or a timing. Whose fault a refusal is, is
+  Soma's `admission_facts()`. `tb-admit` is `api` only: there is no `db` copy to keep in step.
+- **The admission node keeps nothing between walks**: `tb-admit` deletes what it registered, and a
+  409 on `register` clears a dead walk's leftover. Never archive instead: Orion activates only a
+  `draft`, so an archived model can never be admitted again.
 - **The worker pool is the lanes plus one, and the one is the roster's.** Orion has one cron pool
   per node and a match holds its worker for the whole match, so `entrypoint.sh` loads only
   `RUNNER_CRON_WORKERS` lanes (`stage-set.py --drop` leaves the rest out) and sizes `cron.workers`
@@ -123,9 +137,10 @@ Orion:
 - **A cron occurrence's `data` is unreadable**: it returns nowhere, and a trace carries no per-task
   detail (and is dropped above `trace_queue.max_result_size_bytes`). A failing run can be diagnosed
   only by *which* task failed.
-- **Keep `task_details: false` on the match lanes.** With it on, Orion builds a full trace of every
-  write, the per-seat policy tensors included, outside `max_snapshot_bytes`, and `errors_only` drops
-  it only after it has been built and serialized. A runner's memory then grows by gigabytes.
+- **Keep `task_details: false` on the match lanes and on `tb-admit`.** With it on, Orion builds a
+  full trace of every write, the per-seat policy tensors included, outside `max_snapshot_bytes`, and
+  `errors_only` drops it only after it has been built and serialized. A runner's memory then grows by
+  gigabytes.
 - **Loop bounds.** `tb-match-run` loops at most `MATCH_LOOP_MAX` (1010) sweeps: one per turn plus
   the finishing sweep, so it is also the ceiling on `max_turns`, which Soma's `season_rule_spec()`
   caps at 1000 to match. web's `configs.sh` reads the `MATCH_LOOP_MAX = <n>` line, so keep that
@@ -174,7 +189,13 @@ Other:
   non-reproducible cost counters in a replay can't break conformance. Keep anything
   non-deterministic out of the other fields.
 - **`engine.ops_budget` must equal Soma's `adapter_ops_max`,** and `orion_version` must equal Soma's.
-  web's `configs.sh` checks both.
+  web's `configs.sh` checks both, and the admission claim refuses a runner on another Orion.
+- **`ADMIT_LOOP_MAX` must reach Soma's `admit_observations`.** `tb-admit` plays one observation a
+  sweep and reports on the last; a claim carrying more stops at the loop's end with no report, and
+  every submission expires. web's `configs.sh` reads the `ADMIT_LOOP_MAX = <n>` line, so keep that
+  exact form.
+- **`models.max_probe_ms` is pinned in `runner.toml.tmpl`**, because the admitting runner admits
+  under it and every match runner's roster re-admits the same versions under it.
 
 ## Removing db mode
 

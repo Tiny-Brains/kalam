@@ -3,13 +3,19 @@
 #   cp .env.example .env                 # the Soma URL, RUNNER_KEY, the trust key and signatures
 #   docker compose up -d                 # KALAM_IMAGE: the release this runner plays
 #   docker compose up -d --build         # or this checkout, with KALAM_IMAGE=tinybrains/kalam:dev
+#   docker compose --profile admit up -d # and the deployment's admitting runner beside it
 #   docker compose logs -f
 #
-# WHAT IT DOES NOT CONTAIN IS THE WHOLE ARGUMENT. There is no database, no object store, no Soma and
-# no second service of any kind. Everything a runner needs that is not on this machine, it asks
-# Soma's gate for -- the match, the numbers it is played under, the URL to write the replay to -- and
-# model bytes are a GET on a public-read bucket, re-hashed against the digest the gate named. If this
-# file ever grows a second service, a runner has stopped being something you can put on a desk.
+# WHAT IT DOES NOT CONTAIN IS THE WHOLE ARGUMENT. There is no database, no object store and no Soma.
+# Everything a runner needs that is not on this machine, it asks Soma's gate for -- the match, the
+# numbers it is played under, the URL to write the replay to -- and model bytes are a GET on a
+# public-read bucket, re-hashed against the digest the gate named. If this file ever grows a service
+# that is not a runner, a runner has stopped being something you can put on a desk.
+#
+# `admit` IS THE SAME RUNNER IN ITS OTHER ROLE, and only under `--profile admit`: the image, the key
+# and every address are the runner's, and RUNNER_ROLE=admit makes it load tb-admit and nothing else.
+# Soma runs no model, so admission waits until one of these is up somewhere -- one per deployment is
+# enough, on whichever machine plays the fewest matches, and a second only shares the queue.
 #
 # WHAT THE OPERATOR COPIES FROM THE DEPLOYMENT. Three things:
 #
@@ -150,5 +156,32 @@ services:
           cpus: ${RUNNER_CPUS:-0}
           memory: ${RUNNER_MEMORY:-0}
 
+  # THE DEPLOYMENT'S ADMITTING RUNNER, off unless `--profile admit`. It claims one submission Soma's
+  # admit clock prepared, admits and probes it on its own Orion, deletes it and reports -- no match
+  # lane and no roster, so a match never waits on an admission and an admission is never timed under
+  # a match's load on this node. Its own label, port and model cache (two Orions must not share one
+  # cache directory), and a CPU ceiling so it cannot take the cores the match runner beside it plays
+  # on. `!override` needs Compose 2.24 or later: ports are otherwise appended, not replaced.
+  admit:
+    extends: runner
+    profiles: [admit]
+    environment:
+      RUNNER_ROLE: admit
+      RUNNER_LABEL: ${RUNNER_LABEL:-runner}-admit
+      # One admission is bounded by tb-admit's own ten minutes, so a stop waits for that and no more.
+      ORION_SHUTDOWN_FORCE_SECS: "630"
+      ORION_CRON_SHUTDOWN_SECS: "630"
+    volumes:
+      - admit-models:/var/lib/orion/models
+    ports: !override
+      - "127.0.0.1:${ADMIT_ADMIN_PORT:-8091}:8080"
+    stop_grace_period: 660s
+    deploy:
+      resources:
+        limits:
+          cpus: ${ADMIT_CPUS:-2}
+          memory: ${ADMIT_MEMORY:-0}
+
 volumes:
   runner-models:
+  admit-models:

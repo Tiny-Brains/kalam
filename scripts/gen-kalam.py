@@ -5,7 +5,7 @@ The SQL and the JSONLogic are unreadable inline in JSON and readable here, so th
 source and `workflows/*.json` + `channels/*.json` are build output, gitignored. `Dockerfile`
 regenerates them into the runner image, so only what this file produces ever ships.
 
-Two clocks:
+Three clocks, and a runner loads them by its role (docker/entrypoint.sh, RUNNER_ROLE):
 
   tb-roster   reconciles this node's model set with the shared schema. Every version the ladder
               says is verified or active is registered here, admitted here, and activated here.
@@ -14,6 +14,11 @@ Two clocks:
   tb-match    claims ONE queued row and plays it turn by turn -- observe, one `model_infer` per
               seat, step -- and finishes it in place. A replica's concurrency is its match lanes:
               one channel per lane, one match in flight on each.
+
+  tb-admit    an ADMITTING runner's only clock (RUNNER_ROLE=admit). Claims one submission Soma's
+              admit clock prepared, registers it here, lets Orion admit it, plays it over the
+              game's reference observations, deletes it and reports what it found. Soma judges the
+              report: this runs the model and decides nothing. `api` mode only.
 
 Run with no arguments to write the files; `--check` fails if what is on disk has drifted.
 """
@@ -43,6 +48,17 @@ MAX_SEATS = 8
 # a ceiling on max_turns too -- a match needs max_turns + 1 sweeps -- and Soma's season_rule_spec()
 # caps execution.max_turns below it. web's configs.sh reads this `MATCH_LOOP_MAX = <n>` line.
 MATCH_LOOP_MAX = 1010
+
+# How many reference observations an admission plays at most: tb-admit-run's loop, one observation a
+# sweep. Soma's `admit_observations` is how many the claim sends, and must not exceed this -- a claim
+# with more would stop at the loop's end without a report. web's configs.sh reads this
+# `ADMIT_LOOP_MAX = <n>` line.
+ADMIT_LOOP_MAX = 64
+
+# How long `admit?wait=true` may hold the call. Orion bounds admission itself by
+# models.admission_timeout_secs (900 s by default); this is shorter so a runner that cannot fetch
+# reports so while its claim still stands, rather than after the lease.
+ADMIT_WAIT_MS = 180000
 
 # The action alphabet, and the ONE place the platform knows it. It is the cartridge's, published in
 # the competitor guide's *What your model answers* -- a per-cell head's channel order is part of the
@@ -1056,6 +1072,176 @@ ROSTER_TASKS = [
 ]
 
 
+# ======================================================================= tb-admit
+#
+# ONE SUBMISSION A RUN, and the loop is the probe: sweep 0 claims, registers, admits and activates,
+# and every sweep plays one reference observation, so the observation count is the claim's and the
+# task list stays fixed. The sweep that plays the last one -- or sweep 0, when there is nothing to
+# play -- deletes the model and reports.
+#
+# WHAT THE REPORT IS: facts, as Orion and the probe produced them. Soma's admit clock types them
+# (admission_facts) and decides whose fault a refusal is, so nothing here judges -- not a stage, not a
+# budget, not a timing. A run that dies sends nothing, its lease lapses, and the next claim takes the
+# row with one attempt spent.
+#
+# `api` ONLY. A `db`-mode replica has no admission route and its role no grant on the queue, so there
+# is no `db` branch to keep in step.
+
+JOB = "data.job.admission"
+PROBING = {"and": [var("data.probing"), {"<": [var("temp_data.i"), var("data.n")]}]}
+REPORTING = {"or": [{"!": var("data.probing")},
+                    {">=": [var("temp_data.i"), {"-": [var("data.n"), 1]}]}]}
+
+# What is registered: the registration Soma rebuilt at the centre, never the competitor's manifest,
+# by reference and digest. The node fetches the object and re-hashes it, so a row that lies about its
+# digest fails admission here. `admission`, not `ladder`: nothing warms a model this node only tests.
+ADMIT_REGISTRATION = {
+    "manifest": var(f"{JOB}.registration"),
+    "artifact": {"connector": vars_("models_bucket_connector"),
+                 "key": var(f"{JOB}.artifact.key"),
+                 "digest": var(f"{JOB}.artifact.digest")},
+    "tags": ["admission"],
+}
+
+ADMIT_TASKS = [
+    task("aauth", "Exchange the runner key for a token",
+         {"name": "http_call", "input": {"$from": "constants.runner_token_call"}},
+         cond=TURN0, soft=True),
+
+    # The claim states the Orion this node runs: the gate refuses another, because the stats Soma
+    # judges are the ones this Orion measures.
+    task("aclaim", "Claim one submission to admit", http(
+        "kalam-api", "POST", "/v1/runner/admissions/claim", "data.job",
+        body={"orion_version": vars_("orion_version")}, headers=BEARER,
+    ), cond=TURN0, soft=True),
+
+    task("idle", "Stop when there is nothing to admit",
+         halt_unless({"!!": var("data.job.claim.token")}), cond=TURN0),
+
+    task("open", "Open the walk", mapping(
+        ("data.model", var(f"{JOB}.model")),
+        ("data.version_id", var(f"{JOB}.version_id")),
+        ("data.n", {"min": [{"length": [var(f"{JOB}.observations")]}, ADMIT_LOOP_MAX]}),
+        ("data.probing", False),
+        ("data.ok", True),
+        ("data.over_budget", False),
+        ("data.reason", None),
+        ("data.ops_max", 0),
+        ("data.infer_us_max", 0),
+        ("data.checked", 0),
+        ("data.errored", False),
+    ), cond=TURN0),
+
+    task("register", "Register it here, by reference and digest",
+         admin("POST", "/models", "temp_data.made", ADMIT_REGISTRATION), cond=TURN0, soft=True),
+
+    # A 409 IS A WALK THAT DIED BEFORE `drop`. What it left cannot be walked again -- Orion
+    # activates only a `draft` version -- so it goes, whole, and is registered afresh. `made` is
+    # written only on a 2xx, which is what makes it the test. A delete answers 204 with no body.
+    task("clear", "Remove what a dead walk left here", admin(
+        "DELETE", {"cat": ["/models/", var("data.model")]}, "temp_data.cleared",
+        response_format="text",
+    ), cond={"and": [TURN0, {"!": var("temp_data.made")}]}, soft=True),
+    task("reregister", "Register it again, from nothing",
+         admin("POST", "/models", "temp_data.made", ADMIT_REGISTRATION),
+         cond={"and": [TURN0, {"!": var("temp_data.made")}]}, soft=True),
+
+    # Admission, synchronously: fetch, re-hash, read the graph, five zero-filled inferences under
+    # models.max_probe_ms. The record answers whether it passed, the stage and reason when not, and
+    # the stats Soma judges. Every admin reply is `{"data": ...}`.
+    task("admit", "Fetch, verify, read the graph, probe it", admin(
+        "POST", {"cat": ["/models/", var("data.model"), "/admit?wait=true"]}, "data.adm",
+        timeout_ms=ADMIT_WAIT_MS,
+    ), cond={"and": [TURN0, {"!!": var("temp_data.made")}]}, soft=True),
+
+    # Active, because `model_infer` will not run a model that is not.
+    task("activate", "Activate it here, for the probe", admin(
+        "PATCH", {"cat": ["/models/", var("data.model"), "/status"]}, "temp_data.act",
+        {"status": "active"},
+    ), cond={"and": [TURN0, {"===": [var("data.adm.data.admission.state"), "passed"]}]}, soft=True),
+
+    task("probe_on", "Play the observations only on a model this node admitted and activated",
+         mapping(("data.probing", {"and": [
+             {"===": [var("data.adm.data.admission.state"), "passed"]},
+             {"!!": var("temp_data.act")}]})), cond=TURN0),
+
+    # THE ADAPTER, against the game's reference observations. Orion's own probe runs the GRAPH over
+    # zero-filled inputs and never evaluates an adapter; this is what answers "does this
+    # submission turn an observation of this game into a move, inside the budget".
+    task("reset", "Clear the last inference", mapping(
+        ("temp_data.out", None),
+        ("temp_data.st", None),
+    ), cond=PROBING),
+
+    # `soft`, so an inference that FAILS OUTRIGHT is tallied as `errored` rather than ending the
+    # run, and Soma sends that report back to the queue: an adapter that fails is a submission
+    # that runs out of attempts, while a timeout on a busy runner is another runner's to retry.
+    task("infer", "One inference", {"name": "model_infer", "input": {
+        "model": var("data.model"),
+        "input": {"val": ["data", "job", "admission", "observations",
+                          {"val": ["temp_data", "i"]}]},
+        "output": "temp_data.out",
+        "raw": True,
+        "stats_output": "temp_data.st",
+        "timeout_ms": var(f"{JOB}.infer_ms"),
+    }}, cond=PROBING, soft=True),
+
+    # The platform decodes the head, not the manifest, so the probe checks the shape it will gather
+    # from rather than merely that something came back. `{"length": [{"shape": ...}]}` is a call.
+    task("tally", "What it cost, and whether it answered", mapping(
+        ("data.checked", {"+": [var("data.checked"), 1]}),
+        ("data.errored", {"or": [var("data.errored"), {"!": var("temp_data.out")}]}),
+        ("data.ops_max", {"max": [var("data.ops_max"),
+                                  {"??": [var("temp_data.st.peak_ops"), 0]}]}),
+        ("data.infer_us_max", {"max": [var("data.infer_us_max"), {"floor": [
+            {"*": [1000, {"??": [var("temp_data.st.inference_ms"), 0]}]}]}]}),
+        ("temp_data.rank", {"if": [{"!": var("temp_data.out.policy")}, 0,
+                                   {"length": [{"shape": [var("temp_data.out.policy")]}]}]}),
+        ("data.ok", {"and": [var("data.ok"), {"!!": var("temp_data.out.policy")},
+                             {"in": [var("temp_data.rank"), [2, 4]]}]}),
+        ("data.over_budget", {"or": [var("data.over_budget"),
+                                     {">": [{"??": [var("temp_data.st.peak_ops"), 0]},
+                                            var(f"{JOB}.budget_ops")]}]}),
+        ("data.reason", {"if": [var("data.reason"), var("data.reason"),
+                                {"!": var("temp_data.out.policy")}, "ADAPTER_INVALID",
+                                {"!": {"in": [var("temp_data.rank"), [2, 4]]}}, "HEAD_UNREADABLE",
+                                None]}),
+    ), cond=PROBING),
+
+    # Whatever the verdict: this node is not a player, and a model left here would be recompiled
+    # into every generation it never serves. DELETED, NOT ARCHIVED, so every walk starts from
+    # nothing: an archived model cannot be registered again.
+    task("drop", "Leave nothing of it on this node", admin(
+        "DELETE", {"cat": ["/models/", var("data.model")]}, "temp_data.dropped",
+        response_format="text",
+    ), cond={"and": [REPORTING, {"!!": var("temp_data.made")}]}, soft=True),
+
+    # THE FIELD NAMES ARE THE CONTRACT with soma-runner-admissions-report, which binds
+    # data.req.claim_token, .admission, .stats and .probe. `admission` and `stats` are Orion's
+    # record as it answered, null when it never did -- which Soma reads as ours.
+    task("report", "Report what it found", http(
+        "kalam-api", "POST",
+        {"cat": ["/v1/runner/admissions/", var("data.version_id"), "/report"]},
+        "temp_data.reported",
+        body={"claim_token": var("data.job.claim.token"),
+              "admission": var("data.adm.data.admission"),
+              "stats": var("data.adm.data.stats"),
+              "probe": {"if": [var("data.probing"),
+                               {"ok": var("data.ok"),
+                                "over_budget": var("data.over_budget"),
+                                "reason": var("data.reason"),
+                                "ops_max": var("data.ops_max"),
+                                "infer_us_max": var("data.infer_us_max"),
+                                "checked": var("data.checked"),
+                                "errored": var("data.errored")},
+                               None]}},
+        headers=BEARER,
+    ), cond=REPORTING, soft=True),
+
+    task("end", "Stop once the report is sent", halt_unless({"!": REPORTING})),
+]
+
+
 # ======================================================================= the documents
 
 MATCH = {
@@ -1093,6 +1279,23 @@ ROSTER = {
     "condition": True,
     "loop": {"counter": "i", "max": 256},
     "tasks": ROSTER_TASKS,
+}
+
+ADMIT = {
+    "workflow_id": "tb-admit-run",
+    "name": "Kalam: admit one submission",
+    "description": (
+        "An ADMITTING runner's clock (RUNNER_ROLE=admit). Claims one submission Soma's admit clock "
+        "prepared, registers it on this node from the registration Soma rebuilt, lets Orion admit "
+        "it, activates it, plays it over the reference observations the claim carried -- one a "
+        "sweep -- deletes it, and reports Orion's record, its stats and the probe's tally to the "
+        "gate. Soma judges the report; nothing here decides whose fault anything is. A run that "
+        "dies reports nothing, and the lease lapsing hands the row to the next claim."
+    ),
+    "tags": ["pkg:kalam"],
+    "condition": True,
+    "loop": {"counter": "i", "max": ADMIT_LOOP_MAX},
+    "tasks": ADMIT_TASKS,
 }
 
 MATCH_CHANNELS = [
@@ -1139,6 +1342,27 @@ ROSTER_CHANNEL = {
         "timeout_ms": 120000,
         "tracing": {"$from": "constants.clock_tracing"},
     },
+}
+
+
+# ONE SUBMISSION IN FLIGHT: `forbid` on its own key, so a run that is still probing is never
+# overlapped by the next tick. Only an admitting runner loads it (entrypoint.sh drops it elsewhere),
+# and that runner loads nothing else, so a match never shares its machine's time with an admission
+# on it.
+ADMIT_CHANNEL = {
+    "channel_id": "tb-admit",
+    "name": "tb-admit",
+    "tags": ["pkg:kalam"],
+    "channel_type": "async",
+    "protocol": "cron",
+    "workflow_id": "tb-admit-run",
+    "transport_config": {
+        "schedule": "*/10 * * * * *",
+        "timezone": "UTC",
+        "misfire_policy": "skip",
+        "concurrency": {"policy": "forbid", "key": "admit"},
+    },
+    "config": {"$from": "constants.admit_channel_config"},
 }
 
 
@@ -1195,7 +1419,9 @@ def grouped(doc: dict) -> dict:
 def outputs() -> list[tuple[pathlib.Path, dict]]:
     out = [(PKG / "workflows" / f"{MATCH['workflow_id']}.json", grouped(MATCH)),
            (PKG / "workflows" / f"{ROSTER['workflow_id']}.json", grouped(ROSTER)),
-           (PKG / "channels" / f"{ROSTER_CHANNEL['channel_id']}.json", ROSTER_CHANNEL)]
+           (PKG / "workflows" / f"{ADMIT['workflow_id']}.json", grouped(ADMIT)),
+           (PKG / "channels" / f"{ROSTER_CHANNEL['channel_id']}.json", ROSTER_CHANNEL),
+           (PKG / "channels" / f"{ADMIT_CHANNEL['channel_id']}.json", ADMIT_CHANNEL)]
     out += [(PKG / "channels" / f"{c['channel_id']}.json", c) for c in MATCH_CHANNELS]
     return out
 
@@ -1225,6 +1451,7 @@ def main(check: bool) -> int:
     print(f"    tb-match: {len(MATCH_TASKS)} tasks, loop max {MATCH['loop']['max']}, "
           f"{len(MATCH_CHANNELS)} channels")
     print(f"    tb-roster: {len(ROSTER_TASKS)} tasks")
+    print(f"    tb-admit: {len(ADMIT_TASKS)} tasks, loop max {ADMIT['loop']['max']}")
     return 0
 
 

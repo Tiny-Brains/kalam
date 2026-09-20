@@ -4,9 +4,12 @@ Kalam is the TinyBrains match runner. It is an Orion 1.8.1 package (cron channel
 workflows, connectors) shipped inside a runnable image, `ghcr.io/tiny-brains/kalam`: orion-server,
 the package, and the Ants engine from one ants release. A runner claims queued matches through
 [Soma](https://github.com/Tiny-Brains/soma)'s runner gate, plays them turn by turn on Orion's own
-model runtime, and posts the result and the replay back. It holds no database credential and binds
-no public port. Soma owns the schema, pairing and ratings, [ants](https://github.com/Tiny-Brains/ants)
-owns the rules, and Orion runs the models.
+model runtime, and posts the result and the replay back. The same image in its other role, an
+**admitting runner** (`RUNNER_ROLE=admit`), admits submissions: Soma runs no model, so every
+submission is registered, admitted and played over the game's reference observations on one of
+these, and Soma judges the report. Either way it holds no database credential and binds no public
+port. Soma owns the schema, admission's verdicts, pairing and ratings,
+[ants](https://github.com/Tiny-Brains/ants) owns the rules, and Orion runs the models.
 
 *Kalam* (களம்) is Tamil for the field of contest.
 
@@ -16,6 +19,7 @@ owns the rules, and Orion runs the models.
 cp .env.example .env            # fill it in: see Configuration, or Run a runner
 docker compose up -d            # KALAM_IMAGE, a release; or tinybrains/kalam:dev and --build
 docker compose logs -f runner
+docker compose --profile admit up -d   # the deployment's admitting runner, on one machine
 ```
 
 A healthy boot logs the architecture and engine it derived, then the self-load, and ends with:
@@ -29,7 +33,8 @@ A healthy boot logs the architecture and engine it derived, then the self-load, 
 ```
 
 If it ends with `self-load: …` instead, the container stops on purpose: see
-[Troubleshooting](#troubleshooting).
+[Troubleshooting](#troubleshooting). The admitting runner (`docker compose logs -f admit`) logs
+`==> an admitting runner: the tb-admit lane, 1 cron worker, no match lanes` and loads one channel.
 
 **Against web's local stack** (bring it up first, as [web](https://github.com/Tiny-Brains/web)'s
 README says):
@@ -84,14 +89,18 @@ Set in `.env`. [`docker-compose.yml`](docker-compose.yml) refuses to start witho
 | `RUNNER_CRON_SHUTDOWN_SECS` | `2700` | Orion `cron.shutdown_timeout_secs` |
 | `RUNNER_STOP_GRACE` | `2760s` | Docker's stop grace. Must exceed drain + force |
 | `RUNNER_CPUS`, `RUNNER_MEMORY` | `0` (no limit) | Container limits |
+| `ADMIT_CPUS`, `ADMIT_MEMORY` | `2`, `0` | The admitting runner's limits (`--profile admit`). The CPU ceiling keeps it off the cores the runner beside it plays on |
+| `ADMIT_ADMIN_PORT` | `8091` | The admitting runner's loopback port |
 
 Compose also sets values you should not override: `KALAM_DB_URL`, `R2_BUCKET`, `R2_ACCESS_KEY` and
 `R2_SECRET_KEY` are set to the empty string, so the `db`-mode connectors resolve and are never used;
 `ORION_ADMIN_BEARER` is `Bearer ${ORION_ADMIN_KEY}`; `R2_ENDPOINT` comes from `RUNNER_BLOB_ENDPOINT`.
 
 The node's Orion config is [`docker/runner.toml.tmpl`](docker/runner.toml.tmpl): api mode, the
-engine digest (derived by the entrypoint from the component), the model cache, `engine.ops_budget`
-and `models.max_timeout_ms`. The terms a match is played under (`turn_ms`, `max_turns`, the lease
+engine digest (derived by the entrypoint from the component), the model cache, `engine.ops_budget`,
+`models.max_timeout_ms` and `models.max_probe_ms`, admission's one timing gate, pinned so every
+runner admits a model under the same number. Compose sets `RUNNER_ROLE=admit` on the `admit`
+service and nothing on `runner`, whose role is `match`. The terms a match is played under (`turn_ms`, `max_turns`, the lease
 and renew interval, the refusal and strike ceilings, the replay and model prefixes) arrive on each
 claim from the match's season, and are not configured here.
 
@@ -158,6 +167,24 @@ That file never builds, never lets `RUNNER_ALLOW_PRIVATE_URLS` through, runs Ori
 - **No inbound ports.** 8080 is published on loopback only (`RUNNER_ADMIN_PORT`), for `/health` and
   `/metrics`. Publishing it would expose this node's admin API.
 
+### The admitting runner
+
+`docker compose --profile admit up -d` starts `admit` beside `runner`: the same image, key and
+addresses, labelled `<RUNNER_LABEL>-admit` on the Runners screen, with its own model cache. With
+`RUNNER_ROLE=admit` it loads `tb-admit` and nothing else. Every 10 s it claims one submission Soma
+prepared (`POST /v1/runner/admissions/claim`), registers it on its own node from the registration
+Soma rebuilt, lets Orion admit it, plays it over up to 64 reference observations, deletes it, and
+reports (`POST /v1/runner/admissions/{id}/report`). Soma decides.
+
+- **One per deployment is enough**, and nothing is admitted while none is up: submissions wait in
+  `testing` without spending an attempt. A second one only shares the queue.
+- **Put it where matches are fewest.** A probe measured over `max_probe_ms` on a busy machine is sent
+  back to be tried again, and three of those expire the submission `TIMED_OUT`. It plays no match,
+  so an admission never takes time from one on its own node, and `ADMIT_CPUS` keeps it off the
+  runner beside it.
+- **Its Orion must be the one Soma's `orion_version` names**: the claim answers 409
+  `orion_version_differs` otherwise, on every poll.
+
 ### The replay endpoint
 
 One bucket has three addresses, and two of them must be the same string, because SigV4 signs the host:
@@ -212,6 +239,8 @@ while it is plainly switched on.
 | Matches are claimed and handed back; rows eventually fail `MODEL_UNAVAILABLE` | This node can't serve a seat's model, because its roster clock hasn't registered and activated it | Check `MODELS_ENDPOINT`, `MODELS_BUCKET` and the read key. Against a local stack, also check `RUNNER_ALLOW_PRIVATE_URLS=1` |
 | Calls to this node's admin API get 401 | `ORION_ADMIN_BEARER` must be the whole `Bearer <key>` header | Leave it as compose sets it |
 | Rows stay `running` after a restart | The drain was cut short: Docker's grace period ran out before Orion's | Keep `RUNNER_STOP_GRACE` above drain + force. The rows are reaped when their lease lapses |
+| Submissions stay `testing` (phase `queued`) | No admitting runner is up, or its claim is refused | Start one with `--profile admit`. A 409 `orion_version_differs` in its log means its image is not on Soma's Orion |
+| A submission expires `TIMED_OUT` | Every attempt's report decided nothing: the runner could not fetch it, ran out of time, measured the probe over `max_probe_ms`, or an inference failed outright | `admissions.requeued_for` names the last reason |
 
 ## Developing the package
 
@@ -268,19 +297,20 @@ connectors/                    authored connector definitions
   kalam-blobs-put.json         the replay PUT to a presigned URL; base URL from R2_ENDPOINT
   kalam-db.json                db mode only: Postgres as the kalam role
   kalam-blobs.json             db mode only: signs replay PUTs itself
-shared/kalam.json              shared constants: clock tracing, the match lanes' config, the token call
+shared/kalam.json              shared constants: clock tracing, the lanes' configs, the token call
 scripts/
-  gen-kalam.py                 source of workflows/ and channels/: the SQL, the task lists, the lanes
+  gen-kalam.py                 source of workflows/ and channels/: the SQL, the task lists, the lanes,
+                               tb-admit
   check-defs.sh                no-stack gate: drift, lint, clippy, fmt
   check-sql.sh                 PREPARE the generated SQL; assert the kalam role's grants
   load-package.sh              compile and apply the package into a node
   stage-set.py                 stage connectors with a deployment's URLs and private-address flags
 docker/
-  entrypoint.sh                derive arch and engine digest, migrate, self-load, exec orion-server
+  entrypoint.sh                derive arch, engine digest and role, migrate, self-load, exec orion-server
   runner.toml.tmpl             the runner's Orion config
   replica-db.toml.tmpl         db-mode config: run by nothing, kept for the rollback and web's check
 Dockerfile                     the runner image: orion-server, the package, the engine from an ants release
-docker-compose.yml             one runner service
+docker-compose.yml             one runner service, and `admit` under --profile admit
 docker-compose.prod.yml        the same runner for a production deployment
 .env.example                   a runner's settings
 .env.prod.example              a production runner's settings
@@ -312,6 +342,10 @@ plugins/tb-ants/               optional local engine for lint (gitignored)
   kind a refused row after the fresh ones.
 - **The roster always has a worker.** Orion's pool is the match lanes plus one, and only
   `RUNNER_CRON_WORKERS` lanes load, so no number of long matches can skip a roster tick.
+- **A runner has one role.** A match runner loads no `tb-admit`, and an admitting runner loads
+  nothing else, so an admission never shares a node with a match.
+- **An admitting runner reports and never decides.** It registers what Soma rebuilt, never the
+  competitor's manifest, deletes what it registered, and sends Orion's record as it answered.
 - **Game state stays opaque.** No workflow interprets `wave_state`, an observation, an action or a
   ref. The policy head is the one tensor the platform reads, because a manifest cannot decode it.
 - **A match's terms come from its season, on the claim.** That includes the strike ceiling, which is
@@ -342,6 +376,14 @@ plugins/tb-ants/               optional local engine for lint (gitignored)
   runner's calls and lift the per-address runner limit.
 - `match_concurrency` in the runner config is read by nothing, and in api mode neither is
   `refusal_ceiling`.
+- An admitting runner's idle poll is a token exchange and a claim every 10 s, like a lane's.
+- Every admission runs twice on the admitting runner: Orion 1.8.1 queues one when a model is
+  registered and `admit?wait=true` runs another inline, and registration has no way to skip the
+  queued one. When the inline one fails fast, `tb-admit` deletes the model before the queued one
+  finishes, which logs `Model admission could not be recorded` at ERROR.
+- `tb-admit-run` plays one observation a sweep, so a claim carrying more than `ADMIT_LOOP_MAX` (64)
+  would stop at the loop's end without a report. Soma's `admit_observations` is held to it by web's
+  `configs.sh`.
 - The `db`-mode branch is still in the package as a rollback. CLAUDE.md has the removal checklist.
 
 ## License

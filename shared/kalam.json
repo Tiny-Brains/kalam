@@ -5,6 +5,10 @@
       "timeout_ms": 2400000,
       "tracing": { "errors_only": true, "task_details": false }
     },
+    "admit_channel_config": {
+      "timeout_ms": 600000,
+      "tracing": { "errors_only": true, "task_details": false }
+    },
     "runner_token_call": {
       "connector": "kalam-api",
       "method": "POST",

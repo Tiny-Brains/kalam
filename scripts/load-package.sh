@@ -21,6 +21,8 @@
 #   KALAM_ORION_ADMIN          this node's own admin API, for the kalam-orion connector
 #   R2_ENDPOINT                the replay store, for the kalam-blobs-put connector
 #   PLUGIN_SIG_DIR             detached Ed25519 signatures, named <component>.sig
+#   KALAM_ROLE                 admit loads tb-admit alone; anything else, the match lanes and roster
+#   KALAM_MATCH_LANES          how many match lanes to load (entrypoint.sh sets both)
 set -eu
 
 ADMIN="${ORION_ADMIN:-http://127.0.0.1:8080/api/v1/admin}"
@@ -64,6 +66,10 @@ PRIVATE=$([ "${KALAM_ALLOW_PRIVATE_URLS:-0}" = "1" ] && echo true || echo false)
 # THE LANES THIS NODE PLAYS. entrypoint.sh sets KALAM_MATCH_LANES from RUNNER_CRON_WORKERS and sizes
 # Orion's worker pool at one more, for the roster; a lane above the count is left out of the set, so
 # the pool can never be filled by matches alone. Unset loads every lane the package ships.
+#
+# AND THE ROLE. An admitting runner (KALAM_ROLE=admit, lanes 0) loads tb-admit and no match lane and
+# no roster; any other loads no tb-admit, so a match runner never admits between matches. The
+# workflows load either way -- a workflow with no channel never runs.
 DROP=""
 if [ -n "${KALAM_MATCH_LANES:-}" ]; then
   for f in channels/tb-match-*.json; do
@@ -71,6 +77,11 @@ if [ -n "${KALAM_MATCH_LANES:-}" ]; then
     n=${n%.json}
     if [ "$n" -gt "$KALAM_MATCH_LANES" ]; then DROP="$DROP --drop=$f"; fi
   done
+fi
+if [ "${KALAM_ROLE:-match}" = "admit" ]; then
+  DROP="$DROP --drop=channels/tb-roster.json"
+else
+  DROP="$DROP --drop=channels/tb-admit.json"
 fi
 
 echo "==> staging the set"

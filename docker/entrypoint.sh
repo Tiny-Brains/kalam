@@ -1,6 +1,6 @@
 #!/usr/bin/env sh
-# A Kalam RUNNER: derive what this machine is, migrate its disposable state, load the package this
-# image carries, and exec orion-server.
+# A Kalam RUNNER: derive what this machine is and which role it plays, migrate its disposable state,
+# load the package this image carries, and exec orion-server.
 #
 # THE ONLY SETTINGS A RUNNER NEEDS ARE THE PLATFORM'S ADDRESSES AND ITS KEY. It holds no database
 # credential and no bucket secret: every match statement is a call to Soma's gate, every model is a
@@ -52,6 +52,17 @@ fi
 export KALAM_ENGINE_DIGEST
 echo "==> engine $KALAM_ENGINE_DIGEST"
 
+# ---------------------------------------------------------------- the role
+# WHAT THIS MACHINE DOES, AND A RUNNER DOES ONE OR THE OTHER. `match` (the default) plays matches:
+# its lanes and the roster clock. `admit` admits submissions for Soma's admit clock: the tb-admit
+# lane and nothing else, so an admission never takes CPU from a match on the same node, and its
+# probe is not timed under a match's load. load-package.sh leaves the other role's channels out.
+KALAM_ROLE="${RUNNER_ROLE:-match}"
+case "$KALAM_ROLE" in
+  match|admit) ;;
+  *) echo "RUNNER_ROLE must be match or admit, got '$KALAM_ROLE'" >&2; exit 1 ;;
+esac
+
 # ---------------------------------------------------------------- lanes and workers
 # RUNNER_CRON_WORKERS IS MATCHES AT ONCE, and it is spent as LANES, not as a bigger pool. Orion has
 # one cron worker pool per node and a match holds its worker for the whole match, so a pool shared
@@ -59,22 +70,31 @@ echo "==> engine $KALAM_ENGINE_DIGEST"
 # ticks are skipped (misfire `skip`) whenever it is not. A new version then goes unregistered while
 # every lane refuses its trial. So exactly this many lanes are loaded (load-package.sh drops the
 # rest before compile), each `forbid` on its own key and so never holding more than one worker, and
-# Orion gets one worker more: the roster's, which no match can take.
-lanes="${RUNNER_CRON_WORKERS:-2}"
-case "$lanes" in
-  ''|*[!0-9]*) echo "RUNNER_CRON_WORKERS must be a whole number of matches, got '$lanes'" >&2; exit 1 ;;
-esac
-[ "$lanes" -ge 1 ] || { echo "RUNNER_CRON_WORKERS must be at least 1" >&2; exit 1; }
-shipped=$(ls "$PKG"/channels/tb-match-*.json 2>/dev/null | wc -l | tr -d ' ')
-[ "$shipped" -ge 1 ] || { echo "no match lanes under $PKG/channels" >&2; exit 1; }
-if [ "$lanes" -gt "$shipped" ]; then
-  echo "==> RUNNER_CRON_WORKERS=$lanes, but the package ships $shipped match lanes: playing $shipped"
-  lanes=$shipped
+# Orion gets one worker more: the roster's, which no match can take. An admitting runner plays no
+# match and has one worker, the admission's.
+if [ "$KALAM_ROLE" = admit ]; then
+  KALAM_MATCH_LANES=0
+  KALAM_CRON_WORKERS=1
+  channels=1
+  echo "==> an admitting runner: the tb-admit lane, 1 cron worker, no match lanes"
+else
+  lanes="${RUNNER_CRON_WORKERS:-2}"
+  case "$lanes" in
+    ''|*[!0-9]*) echo "RUNNER_CRON_WORKERS must be a whole number of matches, got '$lanes'" >&2; exit 1 ;;
+  esac
+  [ "$lanes" -ge 1 ] || { echo "RUNNER_CRON_WORKERS must be at least 1" >&2; exit 1; }
+  shipped=$(ls "$PKG"/channels/tb-match-*.json 2>/dev/null | wc -l | tr -d ' ')
+  [ "$shipped" -ge 1 ] || { echo "no match lanes under $PKG/channels" >&2; exit 1; }
+  if [ "$lanes" -gt "$shipped" ]; then
+    echo "==> RUNNER_CRON_WORKERS=$lanes, but the package ships $shipped match lanes: playing $shipped"
+    lanes=$shipped
+  fi
+  KALAM_MATCH_LANES=$lanes
+  KALAM_CRON_WORKERS=$((lanes + 1))
+  channels=$KALAM_CRON_WORKERS
+  echo "==> $KALAM_MATCH_LANES match lane(s), $KALAM_CRON_WORKERS cron workers (one is the roster's)"
 fi
-KALAM_MATCH_LANES=$lanes
-KALAM_CRON_WORKERS=$((lanes + 1))
-export KALAM_MATCH_LANES KALAM_CRON_WORKERS
-echo "==> $KALAM_MATCH_LANES match lane(s), $KALAM_CRON_WORKERS cron workers (one is the roster's)"
+export KALAM_ROLE KALAM_MATCH_LANES KALAM_CRON_WORKERS
 
 echo "==> migrating state"
 orion-server -c "$CFG" migrate > /dev/null
@@ -108,10 +128,10 @@ orion-server -c "$CFG" migrate > /dev/null
              | tr '{' '\n' | grep -c '"status":"active"' || true)
     plugin=$(curl -fsS -H "Authorization: Bearer $ORION_ADMIN_KEY" http://127.0.0.1:8080/health \
              | grep -c '"tb.ants"' || true)
-    if [ "$plugin" -ge 1 ] && [ "$active" -ge 2 ]; then
+    if [ "$plugin" -ge 1 ] && [ "$active" -ge "$channels" ]; then
       echo "==> loaded: tb.ants is live and $active channels are active, this node can claim"
     else
-      echo "self-load: tb.ants=$plugin active-channels=$active -- this node is invisible" >&2
+      echo "self-load: tb.ants=$plugin active-channels=$active of $channels -- this node is invisible" >&2
       echo "           capacity, not a runner. A channel left in draft means package apply" >&2
       echo "           could not activate a workflow: read the error above it." >&2
       kill -TERM 1 2>/dev/null
