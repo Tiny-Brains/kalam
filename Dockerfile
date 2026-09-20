@@ -118,7 +118,6 @@ COPY scripts/load-package.sh /pkg/kalam/scripts/
 # entrypoint.sh copies it aside and shapes THAT for the node's role rather than writing here.
 COPY channels/  /pkg/kalam/channels/
 COPY workflows/ /pkg/kalam/workflows/
-COPY sql/       /pkg/kalam/sql/
 # The engine, its two plugin manifests and the cartridge's registration manifest, from the one ants
 # release this image was built with.
 COPY --from=ants /tb-ants.wasm /plugin.json /cartridge.json /plugin.toml /pkg/kalam/plugins/tb-ants/

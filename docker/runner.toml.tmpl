@@ -7,11 +7,10 @@
 # connection string, no bucket secret and no admin token for anything but this node's own loopback
 # API. What a machine needs to play rated matches is a key, a label, and the engine it plays.
 #
-# AND THE NUMBERS A MATCH IS PLAYED UNDER ARE NOT HERE EITHER. The `db`-mode config
-# (replica-db.toml.tmpl) carries turn_ms, max_turns, lease_seconds, renew_every_n_turns,
-# refusal_ceiling, replay_prefix and model_prefix, because a `db`-mode replica has to: the `kalam`
-# role is granted neither `seasons` nor `games`, so it cannot read what the season says. A runner
-# reads none of them -- every one arrives on the claim, from the season that owns the match.
+# AND THE NUMBERS A MATCH IS PLAYED UNDER ARE NOT HERE EITHER -- not turn_ms, max_turns,
+# lease_seconds, renew_every_n_turns, refusal_ceiling, replay_prefix or model_prefix. Every one of
+# them arrives on the claim, from the season that owns the match, so a runner that carried its own
+# copy could only disagree with the season it is playing for.
 # They are absent rather than commented out ON PURPOSE: a value that is present and ignored is a
 # value an operator will eventually tune, and then wonder why nothing changed.
 
@@ -38,13 +37,8 @@ url = "sqlite:${ORION_STATE_PATH:-/var/lib/orion/state.db}"
 auto_migrate = true
 
 [vars]
-# NOT A VARIABLE. A runner has one mode; `db` needs a database credential, which is the thing this
-# whole file exists not to hold. The package still carries its `db` branch as a rollback; no image
-# runs it.
-mode = "api"
-
-# MAY A CONNECTOR DIAL A PRIVATE ADDRESS. `kalam-api`, `kalam-blobs-put`, `kalam-models` and
-# `kalam-blobs` read this as `var://allow_private_urls`; `kalam-orion` is always allowed one,
+# MAY A CONNECTOR DIAL A PRIVATE ADDRESS. `kalam-api`, `kalam-blobs-put` and `kalam-models` read
+# this as `var://allow_private_urls`; `kalam-orion` is always allowed one,
 # because it is THIS NODE'S OWN admin API and on a standalone runner that is 127.0.0.1:8080.
 # One variable could never express both, which is why the exception is authored on the connector.
 #
@@ -89,14 +83,7 @@ node_version = "${RUNNER_NODE_VERSION:-dev}"
 # is those lanes plus the roster's own worker.
 match_concurrency = 4
 
-# How often a row may be refused because this node cannot serve a seat's model before it fails as
-# MODEL_UNAVAILABLE. Counted apart from lease lapses, because they mean different things: a lapse
-# is a crash, a refusal is a roster that has not caught up. In `api` the claim carries the season's
-# value and this is not read -- it is here only because the gate may answer without one on a season
-# whose `execution` block is absent, and a runner with no number at all would divide by null.
-refusal_ceiling = 5
-
-# NO poll_secs. The db-mode config carried one and NOTHING READ IT -- the poll rate is the cron
+# NO poll_secs. One was carried here once and NOTHING READ IT -- the poll rate is the cron
 # channel's `schedule` (`*/5 * * * * *`), which is package content, versioned with the channel and
 # the same on every node that loads it. A runner cannot slow its own polling from this file, and
 # pretending otherwise with a var the workflow never looks at is worse than not offering it. Polling
@@ -148,8 +135,8 @@ enabled = true
 public_keys = ["${TB_TRUST_PUBLIC_KEY}"]
 
 # ONNX AS A GOVERNED ENTITY. A match runner registers, admits and activates every model its
-# `tb-roster` clock is told about -- over the gate, in `api` mode, so it never reads model_versions
-# itself -- then plays them with `model_infer`. An admitting runner registers one submission at a
+# `tb-roster` clock is told about -- over the gate, so it never reads model_versions itself --
+# then plays them with `model_infer`. An admitting runner registers one submission at a
 # time from the admission it claimed, probes it and deletes it. There is no sidecar and no loader: the artifact is
 # fetched from the bucket by connector and digest, HASHED AGAINST WHAT THE ROSTER DECLARED, and
 # held in an LRU session cache. That re-hash is why a public bucket and a read-only key are enough.
@@ -187,8 +174,8 @@ max_probe_ms = 250
 max_input_elements  = 1048576
 max_output_elements = 1048576
 
-# THE SEASON'S CEILING, NOT THE GAME'S -- and this is the one number in this file that a `db`-mode
-# replica gets wrong. `model_infer` asks for `turn_ms` off the claim and Orion SILENTLY CLAMPS it
+# THE SEASON'S CEILING, NOT THE GAME'S. `model_infer` asks for `turn_ms` off the claim, which
+# carries the season's value, and Orion SILENTLY CLAMPS it
 # to this (`v.min(max_timeout_ms)`), so a node with 1000 here playing a season with turn_ms = 5000
 # gives every model one second while the match is scored as if it had five. No error, no trace: the
 # models simply lose turns they were owed.

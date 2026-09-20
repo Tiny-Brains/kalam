@@ -7,32 +7,8 @@
   "loop": { "counter": "i", "max": 256 },
   "tasks": [
     {
-      "id": "roster",
-      "name": "What the ladder says this node should be able to play",
-      "condition": {
-        "and": [
-          { "==": [{ "var": "temp_data.i" }, 0] },
-          { "!=": [{ "var": "metadata.vars.mode" }, "api"] }
-        ]
-      },
-      "function": {
-        "name": "db_read",
-        "input": {
-          "connector": "kalam-db",
-          "query": { "$sql": "../sql/tb-roster-run-roster.sql" },
-          "params": [{ "var": "metadata.vars.model_prefix" }],
-          "output": "temp_data.rst"
-        }
-      }
-    },
-    {
-      "id": "when_rauth",
-      "condition": {
-        "and": [
-          { "==": [{ "var": "temp_data.i" }, 0] },
-          { "==": [{ "var": "metadata.vars.mode" }, "api"] }
-        ]
-      },
+      "id": "when_roster",
+      "condition": { "==": [{ "var": "temp_data.i" }, 0] },
       "tasks": [
         {
           "id": "rauth",
@@ -41,7 +17,7 @@
           "function": { "name": "http_call", "input": { "$from": "constants.runner_token_call" } }
         },
         {
-          "id": "roster_api",
+          "id": "roster",
           "name": "What the ladder says this node should be able to play",
           "continue_on_error": true,
           "function": {
@@ -51,33 +27,11 @@
               "method": "GET",
               "path": "/v1/runner/roster",
               "headers": { "Authorization": { "cat": ["Bearer ", { "var": "data.tok.token" }] } },
-              "output": "temp_data.rstapi"
+              "output": "data.rb"
             }
           }
         }
       ]
-    },
-    {
-      "id": "rbody",
-      "name": "One roster, whoever answered",
-      "condition": { "==": [{ "var": "temp_data.i" }, 0] },
-      "function": {
-        "name": "map",
-        "input": {
-          "mappings": [
-            {
-              "path": "data.rb",
-              "logic": {
-                "if": [
-                  { "==": [{ "var": "metadata.vars.mode" }, "api"] },
-                  { "var": "temp_data.rstapi" },
-                  { "var": "temp_data.rst.0.body" }
-                ]
-              }
-            }
-          ]
-        }
-      }
     },
     {
       "id": "more",

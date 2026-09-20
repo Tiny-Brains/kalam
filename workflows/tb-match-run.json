@@ -7,17 +7,16 @@
   "loop": { "counter": "i", "max": 1010 },
   "tasks": [
     {
-      "id": "when_token",
+      "id": "when_first",
       "condition": { "==": [{ "var": "temp_data.i" }, 0] },
       "tasks": [
         {
-          "id": "token",
-          "name": "Mint this attempt's claim token",
+          "id": "begin",
+          "name": "Open the attempt",
           "function": {
             "name": "map",
             "input": {
               "mappings": [
-                { "path": "data.token", "logic": { "random": ["uuid"] } },
                 { "path": "data.opened_at", "logic": { "now": [] } },
                 { "path": "data.dirs", "logic": ["N", "E", "S", "W", "-"] },
                 { "path": "data.finished", "logic": false }
@@ -36,28 +35,9 @@
                   { "!=": [{ "var": "metadata.vars.engine_digest" }, null] },
                   { "!=": [{ "var": "metadata.vars.orion_version" }, null] },
                   {
-                    "if": [
-                      { "==": [{ "var": "metadata.vars.mode" }, "api"] },
-                      {
-                        "and": [
-                          { "!=": [{ "var": "metadata.vars.runner_key" }, null] },
-                          { "!=": [{ "var": "metadata.vars.runner_label" }, null] }
-                        ]
-                      },
-                      {
-                        "and": [
-                          { ">": [{ "var": "metadata.vars.lease_seconds" }, 0] },
-                          { ">": [{ "var": "metadata.vars.renew_every_n_turns" }, 0] },
-                          { ">": [{ "var": "metadata.vars.turn_ms" }, 0] },
-                          { ">": [{ "var": "metadata.vars.max_turns" }, 0] },
-                          { ">": [{ "var": "metadata.vars.refusal_ceiling" }, 0] },
-                          { "!==": [{ "var": "metadata.vars.refusal_grace_secs" }, null] },
-                          { ">=": [{ "var": "metadata.vars.refusal_grace_secs" }, 0] },
-                          { "!=": [{ "var": "metadata.vars.replay_prefix" }, null] },
-                          { "!=": [{ "var": "metadata.vars.blob_endpoint" }, null] },
-                          { "!=": [{ "var": "metadata.vars.model_prefix" }, null] }
-                        ]
-                      }
+                    "and": [
+                      { "!=": [{ "var": "metadata.vars.runner_key" }, null] },
+                      { "!=": [{ "var": "metadata.vars.runner_label" }, null] }
                     ]
                   }
                 ]
@@ -65,87 +45,21 @@
               "on_reject": "halt"
             }
           }
-        }
-      ]
-    },
-    {
-      "id": "when_reap",
-      "condition": {
-        "and": [
-          { "==": [{ "var": "temp_data.i" }, 0] },
-          { "!=": [{ "var": "metadata.vars.mode" }, "api"] }
-        ]
-      },
-      "tasks": [
-        {
-          "id": "reap",
-          "name": "Return lapsed leases to the queue",
-          "function": {
-            "name": "db_write",
-            "input": {
-              "connector": "kalam-db",
-              "query": { "$sql": "../sql/tb-match-run-reap.sql" },
-              "params": [],
-              "output": "temp_data.reaped"
-            }
-          }
         },
         {
-          "id": "claim",
-          "name": "Claim one queued match",
-          "function": {
-            "name": "db_write",
-            "input": {
-              "connector": "kalam-db",
-              "query": { "$sql": "../sql/tb-match-run-claim.sql" },
-              "params": [
-                { "var": "metadata.vars.engine_digest" },
-                { "var": "data.token" },
-                { "var": "metadata.vars.lease_seconds" },
-                8
-              ],
-              "output": "temp_data.claim"
-            }
-          }
-        },
-        {
-          "id": "row",
-          "name": "The row, its seats and their model ids",
-          "function": {
-            "name": "db_read",
-            "input": {
-              "connector": "kalam-db",
-              "query": { "$sql": "../sql/tb-match-run-row.sql" },
-              "params": [{ "var": "data.token" }, { "var": "metadata.vars.model_prefix" }],
-              "output": "temp_data.rows"
-            }
-          }
+          "id": "auth0",
+          "name": "Exchange the runner key for a token",
+          "continue_on_error": true,
+          "function": { "name": "http_call", "input": { "$from": "constants.runner_token_call" } }
         }
       ]
-    },
-    {
-      "id": "auth0",
-      "name": "Exchange the runner key for a token",
-      "condition": {
-        "and": [
-          { "==": [{ "var": "temp_data.i" }, 0] },
-          { "==": [{ "var": "metadata.vars.mode" }, "api"] }
-        ]
-      },
-      "continue_on_error": true,
-      "function": { "name": "http_call", "input": { "$from": "constants.runner_token_call" } }
     },
     {
       "id": "noauth",
       "name": "No token: end the run rather than play unauthenticated",
       "condition": {
         "and": [
-          {
-            "and": [
-              { "==": [{ "var": "temp_data.i" }, 0] },
-              { "==": [{ "var": "metadata.vars.mode" }, "api"] }
-            ]
-          },
+          { "==": [{ "var": "temp_data.i" }, 0] },
           { "!": { "var": "data.tok.token" } }
         ]
       },
@@ -156,111 +70,44 @@
       }
     },
     {
-      "id": "claim_api",
-      "name": "Claim one queued match through the gate",
-      "condition": {
-        "and": [
-          { "==": [{ "var": "temp_data.i" }, 0] },
-          { "==": [{ "var": "metadata.vars.mode" }, "api"] }
-        ]
-      },
-      "continue_on_error": true,
-      "function": {
-        "name": "http_call",
-        "input": {
-          "connector": "kalam-api",
-          "method": "POST",
-          "path": "/v1/runner/claim",
-          "headers": { "Authorization": { "cat": ["Bearer ", { "var": "data.tok.token" }] } },
-          "body": { "engine_digest": { "var": "metadata.vars.engine_digest" }, "seat_count": 8 },
-          "output": "temp_data.cl"
-        }
-      }
-    },
-    {
-      "id": "open",
-      "name": "What the run rides on",
+      "id": "when_claim",
       "condition": { "==": [{ "var": "temp_data.i" }, 0] },
-      "function": {
-        "name": "map",
-        "input": {
-          "mappings": [
-            {
-              "path": "data.claimed",
-              "logic": {
-                "if": [
-                  { "==": [{ "var": "metadata.vars.mode" }, "api"] },
-                  { "!!": { "var": "temp_data.cl.match.id" } },
-                  { ">": [{ "var": "temp_data.claim.rows_affected" }, 0] }
-                ]
-              }
-            },
-            {
-              "path": "data.row",
-              "logic": {
-                "if": [
-                  { "==": [{ "var": "metadata.vars.mode" }, "api"] },
-                  { "var": "temp_data.cl.match" },
-                  { "var": "temp_data.rows.0.row" }
-                ]
-              }
-            },
-            {
-              "path": "data.token",
-              "logic": {
-                "if": [
-                  { "==": [{ "var": "metadata.vars.mode" }, "api"] },
-                  { "var": "temp_data.cl.claim.token" },
-                  { "var": "data.token" }
-                ]
-              }
-            },
-            {
-              "path": "data.ct",
-              "logic": {
-                "if": [
-                  { "==": [{ "var": "metadata.vars.mode" }, "api"] },
-                  { "var": "temp_data.cl.contract" },
-                  {
-                    "turn_ms": { "var": "metadata.vars.turn_ms" },
-                    "max_turns": { "var": "metadata.vars.max_turns" },
-                    "model_prefix": { "var": "metadata.vars.model_prefix" },
-                    "engine_digest": { "var": "metadata.vars.engine_digest" },
-                    "replay_prefix": { "var": "metadata.vars.replay_prefix" },
-                    "renew_every_n_turns": {
-                      "max": [
-                        1,
-                        {
-                          "min": [
-                            { "var": "metadata.vars.renew_every_n_turns" },
-                            {
-                              "floor": [
-                                {
-                                  "/": [
-                                    { "*": [{ "var": "metadata.vars.lease_seconds" }, 1000] },
-                                    {
-                                      "*": [
-                                        { "+": [{ "var": "data.row.seat_count" }, 1] },
-                                        { "var": "metadata.vars.turn_ms" }
-                                      ]
-                                    }
-                                  ]
-                                }
-                              ]
-                            }
-                          ]
-                        }
-                      ]
-                    },
-                    "lease_seconds": { "var": "metadata.vars.lease_seconds" },
-                    "refusal_ceiling": { "var": "metadata.vars.refusal_ceiling" }
-                  }
-                ]
-              }
+      "tasks": [
+        {
+          "id": "claim",
+          "name": "Claim one queued match through the gate",
+          "continue_on_error": true,
+          "function": {
+            "name": "http_call",
+            "input": {
+              "connector": "kalam-api",
+              "method": "POST",
+              "path": "/v1/runner/claim",
+              "headers": { "Authorization": { "cat": ["Bearer ", { "var": "data.tok.token" }] } },
+              "body": {
+                "engine_digest": { "var": "metadata.vars.engine_digest" },
+                "seat_count": 8
+              },
+              "output": "temp_data.cl"
             }
-          ]
+          }
+        },
+        {
+          "id": "open",
+          "name": "What the run rides on",
+          "function": {
+            "name": "map",
+            "input": {
+              "mappings": [
+                { "path": "data.claimed", "logic": { "!!": { "var": "temp_data.cl.match.id" } } },
+                { "path": "data.row", "logic": { "var": "temp_data.cl.match" } },
+                { "path": "data.token", "logic": { "var": "temp_data.cl.claim.token" } },
+                { "path": "data.ct", "logic": { "var": "temp_data.cl.contract" } }
+              ]
+            }
+          }
         }
-      }
+      ]
     },
     {
       "id": "idle",
@@ -376,134 +223,68 @@
       }
     },
     {
-      "id": "release",
-      "name": "A model this node cannot serve: back to the queue",
-      "condition": {
-        "and": [
-          {
-            "and": [
-              { "==": [{ "var": "temp_data.i" }, 0] },
-              { ">": [{ "var": "temp_data.n_missing" }, 0] }
-            ]
-          },
-          { "!=": [{ "var": "metadata.vars.mode" }, "api"] }
-        ]
-      },
-      "function": {
-        "name": "db_write",
-        "input": {
-          "connector": "kalam-db",
-          "query": { "$sql": "../sql/tb-match-run-release.sql" },
-          "params": [
-            { "var": "data.token" },
-            true,
-            { "var": "metadata.vars.refusal_ceiling" },
-            { "var": "metadata.vars.refusal_grace_secs" }
-          ],
-          "output": "temp_data.released"
-        }
-      }
-    },
-    {
-      "id": "release_api",
-      "name": "A model this node cannot serve: back to the queue",
-      "condition": {
-        "and": [
-          {
-            "and": [
-              { "==": [{ "var": "temp_data.i" }, 0] },
-              { ">": [{ "var": "temp_data.n_missing" }, 0] }
-            ]
-          },
-          { "==": [{ "var": "metadata.vars.mode" }, "api"] }
-        ]
-      },
-      "continue_on_error": true,
-      "function": {
-        "name": "http_call",
-        "input": {
-          "connector": "kalam-api",
-          "method": "POST",
-          "path": { "cat": ["/v1/runner/matches/", { "var": "data.row.id" }, "/release"] },
-          "headers": { "Authorization": { "cat": ["Bearer ", { "var": "data.tok.token" }] } },
-          "body": { "claim_token": { "var": "data.token" } },
-          "output": "temp_data.released_api"
-        }
-      }
-    },
-    {
-      "id": "unready",
-      "name": "End the run: the roster has not caught up",
+      "id": "when_unready",
       "condition": {
         "and": [
           { "==": [{ "var": "temp_data.i" }, 0] },
           { ">": [{ "var": "temp_data.n_missing" }, 0] }
         ]
       },
-      "terminal": true,
-      "function": {
-        "name": "map",
-        "input": { "mappings": [{ "path": "data.outcome", "logic": "model_unavailable" }] }
-      }
-    },
-    {
-      "id": "start",
-      "name": "Claimed becomes running",
-      "condition": {
-        "and": [
-          { "==": [{ "var": "temp_data.i" }, 0] },
-          { "!=": [{ "var": "metadata.vars.mode" }, "api"] }
-        ]
-      },
-      "function": {
-        "name": "db_write",
-        "input": {
-          "connector": "kalam-db",
-          "query": { "$sql": "../sql/tb-match-run-start.sql" },
-          "params": [{ "var": "data.token" }],
-          "output": "temp_data.started"
+      "tasks": [
+        {
+          "id": "release",
+          "name": "A model this node cannot serve: back to the queue",
+          "continue_on_error": true,
+          "function": {
+            "name": "http_call",
+            "input": {
+              "connector": "kalam-api",
+              "method": "POST",
+              "path": { "cat": ["/v1/runner/matches/", { "var": "data.row.id" }, "/release"] },
+              "headers": { "Authorization": { "cat": ["Bearer ", { "var": "data.tok.token" }] } },
+              "body": { "claim_token": { "var": "data.token" } },
+              "output": "temp_data.released"
+            }
+          }
+        },
+        {
+          "id": "unready",
+          "name": "End the run: the roster has not caught up",
+          "terminal": true,
+          "function": {
+            "name": "map",
+            "input": { "mappings": [{ "path": "data.outcome", "logic": "model_unavailable" }] }
+          }
         }
-      }
-    },
-    {
-      "id": "start_api",
-      "name": "Claimed becomes running",
-      "condition": {
-        "and": [
-          { "==": [{ "var": "temp_data.i" }, 0] },
-          { "==": [{ "var": "metadata.vars.mode" }, "api"] }
-        ]
-      },
-      "continue_on_error": true,
-      "function": {
-        "name": "http_call",
-        "input": {
-          "connector": "kalam-api",
-          "method": "POST",
-          "path": { "cat": ["/v1/runner/matches/", { "var": "data.row.id" }, "/start"] },
-          "headers": { "Authorization": { "cat": ["Bearer ", { "var": "data.tok.token" }] } },
-          "body": { "claim_token": { "var": "data.token" } },
-          "output": "temp_data.started_api"
-        }
-      }
+      ]
     },
     {
       "id": "when_started",
       "condition": { "==": [{ "var": "temp_data.i" }, 0] },
       "tasks": [
         {
+          "id": "start",
+          "name": "Claimed becomes running",
+          "continue_on_error": true,
+          "function": {
+            "name": "http_call",
+            "input": {
+              "connector": "kalam-api",
+              "method": "POST",
+              "path": { "cat": ["/v1/runner/matches/", { "var": "data.row.id" }, "/start"] },
+              "headers": { "Authorization": { "cat": ["Bearer ", { "var": "data.tok.token" }] } },
+              "body": { "claim_token": { "var": "data.token" } },
+              "output": "temp_data.started"
+            }
+          }
+        },
+        {
           "id": "started",
           "name": "Halt if the start wrote nothing: the token is stale",
           "function": {
             "name": "filter",
             "input": {
-              "condition": {
-                "if": [
-                  { "==": [{ "var": "metadata.vars.mode" }, "api"] },
-                  { "===": [{ "var": "temp_data.started_api.started" }, true] },
-                  { ">": [{ "var": "temp_data.started.rows_affected" }, 0] }
-                ]
-              },
+              "condition": { "===": [{ "var": "temp_data.started.started" }, true] },
               "on_reject": "halt"
             }
           }
@@ -1516,52 +1297,17 @@
       ]
     },
     {
-      "id": "renew",
-      "name": "Extend the lease",
+      "id": "when_renew",
       "condition": {
         "and": [
+          { ">": [{ "var": "temp_data.n_live" }, 0] },
+          { ">": [{ "var": "temp_data.i" }, 0] },
           {
-            "and": [
-              { ">": [{ "var": "temp_data.n_live" }, 0] },
-              { ">": [{ "var": "temp_data.i" }, 0] },
-              {
-                "==": [
-                  { "%": [{ "var": "temp_data.i" }, { "var": "data.ct.renew_every_n_turns" }] },
-                  0
-                ]
-              }
+            "==": [
+              { "%": [{ "var": "temp_data.i" }, { "var": "data.ct.renew_every_n_turns" }] },
+              0
             ]
-          },
-          { "!=": [{ "var": "metadata.vars.mode" }, "api"] }
-        ]
-      },
-      "function": {
-        "name": "db_write",
-        "input": {
-          "connector": "kalam-db",
-          "query": { "$sql": "../sql/tb-match-run-renew.sql" },
-          "params": [{ "var": "data.token" }, { "var": "metadata.vars.lease_seconds" }],
-          "output": "temp_data.renewed"
-        }
-      }
-    },
-    {
-      "id": "when_reauth",
-      "condition": {
-        "and": [
-          {
-            "and": [
-              { ">": [{ "var": "temp_data.n_live" }, 0] },
-              { ">": [{ "var": "temp_data.i" }, 0] },
-              {
-                "==": [
-                  { "%": [{ "var": "temp_data.i" }, { "var": "data.ct.renew_every_n_turns" }] },
-                  0
-                ]
-              }
-            ]
-          },
-          { "==": [{ "var": "metadata.vars.mode" }, "api"] }
+          }
         ]
       },
       "tasks": [
@@ -1572,7 +1318,7 @@
           "function": { "name": "http_call", "input": { "$from": "constants.runner_token_call" } }
         },
         {
-          "id": "renew_api",
+          "id": "renew",
           "name": "Extend the lease",
           "continue_on_error": true,
           "function": {
@@ -1583,7 +1329,7 @@
               "path": { "cat": ["/v1/runner/matches/", { "var": "data.row.id" }, "/renew"] },
               "headers": { "Authorization": { "cat": ["Bearer ", { "var": "data.tok.token" }] } },
               "body": { "claim_token": { "var": "data.token" } },
-              "output": "temp_data.renewed_api"
+              "output": "temp_data.renewed"
             }
           }
         }
@@ -1606,22 +1352,7 @@
               }
             ]
           },
-          {
-            "or": [
-              {
-                "and": [
-                  { "!=": [{ "var": "metadata.vars.mode" }, "api"] },
-                  { "!": { ">": [{ "var": "temp_data.renewed.rows_affected" }, 0] } }
-                ]
-              },
-              {
-                "and": [
-                  { "==": [{ "var": "metadata.vars.mode" }, "api"] },
-                  { "===": [{ "var": "temp_data.renewed_api.applied" }, false] }
-                ]
-              }
-            ]
-          }
+          { "===": [{ "var": "temp_data.renewed.applied" }, false] }
         ]
       },
       "terminal": true,
@@ -1712,19 +1443,6 @@
                       }
                     ]
                   }
-                },
-                {
-                  "path": "temp_data.key",
-                  "logic": {
-                    "cat": [
-                      { "var": "data.ct.replay_prefix" },
-                      "/",
-                      { "var": "data.row.id" },
-                      "/",
-                      { "var": "data.token" },
-                      ".json"
-                    ]
-                  }
                 }
               ]
             }
@@ -1734,41 +1452,11 @@
     },
     {
       "id": "presign",
-      "name": "Sign a PUT for this attempt's replay",
-      "condition": {
-        "and": [
-          {
-            "and": [
-              { "==": [{ "var": "temp_data.n_live" }, 0] },
-              { "!": { "var": "data.finished" } }
-            ]
-          },
-          { "!=": [{ "var": "metadata.vars.mode" }, "api"] }
-        ]
-      },
-      "function": {
-        "name": "storage_presign",
-        "input": {
-          "connector": "kalam-blobs",
-          "method": "PUT",
-          "key": { "var": "temp_data.key" },
-          "expires_in": "15m",
-          "output": "temp_data.signed"
-        }
-      }
-    },
-    {
-      "id": "presign_api",
       "name": "Ask the gate to sign this attempt's replay PUT",
       "condition": {
         "and": [
-          {
-            "and": [
-              { "==": [{ "var": "temp_data.n_live" }, 0] },
-              { "!": { "var": "data.finished" } }
-            ]
-          },
-          { "==": [{ "var": "metadata.vars.mode" }, "api"] }
+          { "==": [{ "var": "temp_data.n_live" }, 0] },
+          { "!": { "var": "data.finished" } }
         ]
       },
       "continue_on_error": true,
@@ -1780,7 +1468,7 @@
           "path": { "cat": ["/v1/runner/matches/", { "var": "data.row.id" }, "/replay-url"] },
           "headers": { "Authorization": { "cat": ["Bearer ", { "var": "data.tok.token" }] } },
           "body": { "claim_token": { "var": "data.token" } },
-          "output": "temp_data.signed_api"
+          "output": "temp_data.signed"
         }
       }
     },
@@ -1794,47 +1482,6 @@
       },
       "tasks": [
         {
-          "id": "signed",
-          "name": "One URL and one endpoint, whoever signed it",
-          "function": {
-            "name": "map",
-            "input": {
-              "mappings": [
-                {
-                  "path": "temp_data.url",
-                  "logic": {
-                    "if": [
-                      { "==": [{ "var": "metadata.vars.mode" }, "api"] },
-                      { "var": "temp_data.signed_api.url" },
-                      { "var": "temp_data.signed" }
-                    ]
-                  }
-                },
-                {
-                  "path": "temp_data.ep",
-                  "logic": {
-                    "if": [
-                      { "==": [{ "var": "metadata.vars.mode" }, "api"] },
-                      { "var": "temp_data.signed_api.endpoint" },
-                      { "var": "metadata.vars.blob_endpoint" }
-                    ]
-                  }
-                },
-                {
-                  "path": "temp_data.key",
-                  "logic": {
-                    "if": [
-                      { "==": [{ "var": "metadata.vars.mode" }, "api"] },
-                      { "var": "temp_data.signed_api.key" },
-                      { "var": "temp_data.key" }
-                    ]
-                  }
-                }
-              ]
-            }
-          }
-        },
-        {
           "id": "put",
           "name": "Write the replay envelope",
           "function": {
@@ -1843,7 +1490,10 @@
               "connector": "kalam-blobs-put",
               "method": "PUT",
               "path": {
-                "substr": [{ "var": "temp_data.url" }, { "length": [{ "var": "temp_data.ep" }] }]
+                "substr": [
+                  { "var": "temp_data.signed.url" },
+                  { "length": [{ "var": "temp_data.signed.endpoint" }] }
+                ]
               },
               "body": {
                 "match_id": { "var": "data.row.id" },
@@ -1874,47 +1524,8 @@
       "name": "Finish the row -- one statement, on the token",
       "condition": {
         "and": [
-          {
-            "and": [
-              { "==": [{ "var": "temp_data.n_live" }, 0] },
-              { "!": { "var": "data.finished" } }
-            ]
-          },
-          { "!=": [{ "var": "metadata.vars.mode" }, "api"] }
-        ]
-      },
-      "function": {
-        "name": "db_write",
-        "input": {
-          "connector": "kalam-db",
-          "query": { "$sql": "../sql/tb-match-run-finish.sql" },
-          "params": [
-            { "var": "data.token" },
-            { "var": "data.row.id" },
-            { "var": "temp_data.seatrows.items" },
-            { "var": "temp_data.res.reason" },
-            { "var": "temp_data.res.turns" },
-            { "var": "data.opened_at" },
-            { "var": "metadata.vars.engine_digest" },
-            { "var": "metadata.vars.orion_version" },
-            { "var": "temp_data.key" }
-          ],
-          "output": "temp_data.wrote"
-        }
-      }
-    },
-    {
-      "id": "finish_api",
-      "name": "Finish the row -- one statement, on the token",
-      "condition": {
-        "and": [
-          {
-            "and": [
-              { "==": [{ "var": "temp_data.n_live" }, 0] },
-              { "!": { "var": "data.finished" } }
-            ]
-          },
-          { "==": [{ "var": "metadata.vars.mode" }, "api"] }
+          { "==": [{ "var": "temp_data.n_live" }, 0] },
+          { "!": { "var": "data.finished" } }
         ]
       },
       "continue_on_error": true,
@@ -1933,9 +1544,9 @@
             "opened_at": { "var": "data.opened_at" },
             "engine_digest": { "var": "metadata.vars.engine_digest" },
             "orion_version": { "var": "metadata.vars.orion_version" },
-            "replay_key": { "var": "temp_data.key" }
+            "replay_key": { "var": "temp_data.signed.key" }
           },
-          "output": "temp_data.wrote_api"
+          "output": "temp_data.wrote"
         }
       }
     },
@@ -1954,13 +1565,7 @@
           "function": {
             "name": "filter",
             "input": {
-              "condition": {
-                "if": [
-                  { "==": [{ "var": "metadata.vars.mode" }, "api"] },
-                  { "===": [{ "var": "temp_data.wrote_api.state" }, "finished"] },
-                  { ">": [{ "var": "temp_data.wrote.rows_affected" }, 0] }
-                ]
-              },
+              "condition": { "===": [{ "var": "temp_data.wrote.state" }, "finished"] },
               "on_reject": "halt"
             }
           }

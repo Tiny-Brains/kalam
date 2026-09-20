@@ -89,31 +89,10 @@ services:
       # `SignatureDoesNotMatch`, a 403 that names neither setting.
       #
       # `kalam-blobs-put` names it directly, as `env://RUNNER_BLOB_ENDPOINT` -- the same name Soma
-      # signs under, so the two settings that must be equal now share a name instead of being
-      # renamed to R2_ENDPOINT on the way in. R2_ACCESS_KEY and R2_SECRET_KEY stay EMPTY, so
-      # `kalam-blobs` -- the connector that would sign for itself -- has nothing to sign with. A
-      # runner that could sign its own replay URL would be one the gate's claim-token check does
-      # not bind.
+      # signs under, so the two settings that must be equal share a name. This machine holds NO
+      # bucket credential at all: a runner that could sign its own replay URL would be one the
+      # gate's claim-token check does not bind.
       RUNNER_BLOB_ENDPOINT: ${RUNNER_BLOB_ENDPOINT:?the replay bucket endpoint Soma signs for}
-
-      # ---- what this machine does NOT hold, which is the point ------------------------------
-      #
-      # PRESENT AND WELL-FORMED, NOT ABSENT AND NOT EMPTY, AND THE DIFFERENCE IS THE WHOLE NODE.
-      # An unresolvable `env://` makes Orion SKIP that connector, and a WORKFLOW that references a
-      # skipped connector CANNOT ACTIVATE -- `package apply` stops at it and the node exits.
-      #
-      # EMPTY USED TO BE ENOUGH; SINCE ORION 1.9.0 IT IS NOT. A connector's endpoint is scheme-checked
-      # AFTER its references resolve, so `""` is now refused ("uses no scheme") exactly as `ftp://`
-      # would be, and the connector is skipped again. These are therefore well-formed URLs that
-      # route nowhere -- `.invalid` is reserved by RFC 2606 and never resolves -- so `kalam-db` and
-      # `kalam-blobs` load, and are never reached: every task naming them is gated on `mode != "api"`.
-      # ALL FIVE, because a connector needs EVERY `env://` it names. When the package's `db` branch
-      # goes (CLAUDE.md, *Removing db mode*), these five lines go with it.
-      KALAM_DB_URL: postgres://unused@db-mode-is-off.invalid/unused
-      R2_ENDPOINT: http://db-mode-is-off.invalid
-      R2_BUCKET: unused
-      R2_ACCESS_KEY: unused
-      R2_SECRET_KEY: unused
 
       # ---- how the package gets here -------------------------------------------------------
       PLUGIN_SIG_DIR: /sig

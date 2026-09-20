@@ -22,9 +22,10 @@ runner, configuration, troubleshooting, releasing, layout) is in `README.md`.
 
 ```sh
 ./scripts/check-defs.sh                # lint + clippy + fmt + clippy -c, all --deny-warnings; no stack
-./scripts/check-sql.sh                 # sql check as the kalam role + assert the grants it must NOT
-                                       # have; needs ../soma/migrations, starts its own postgres
 docker compose up -d --build           # a real match: this runner against web's local stack
+
+# There is no check-sql.sh here any more: this package ships no SQL. The grant boundary it used to
+# assert is soma's -- scripts/check-sql.sh there, and scripts/verify/run.sh against a live database.
 
 # shared/package.json declares requires.orion, and lint/clippy/fmt/compile each check the running
 # binary against it first -- there is no version test in any script here. The image carries one in
@@ -32,31 +33,26 @@ docker compose up -d --build           # a real match: this runner against web's
 docker run --rm --entrypoint orion-server ghcr.io/tiny-brains/kalam clippy /pkg/kalam --deny-warnings
 ```
 
-There is no unit-test suite. Lint and `check-sql.sh` are the compiler, and neither exercises leases
-or turns. `tinybrains conform` on a replay the runner wrote is the test that a match was *played*
+There is no unit-test suite. Lint is the compiler, and it does not exercise leases or turns. `tinybrains conform` on a replay the runner wrote is the test that a match was *played*
 identically, not just recorded.
 
 ## Rules
 
-- **Two modes, one task list.** `[vars] mode` decides how the run reaches the queue. `api` (the only
-  mode any image runs) calls Soma's runner gate, `/v1/runner/*`, and holds no database credential.
-  `db` runs the statements here over `kalam-db` as the `kalam` role. It is the rollback. Both paths
-  are tasks gated on the mode, and they meet in `open`, which normalises `data.claimed`, `data.row`,
-  `data.token` and `data.ct` (the execution contract). Nothing below `open` knows which mode it is in.
-- **The `db`-mode statements are copies of Soma's gate statements** (`soma/workflows/soma-runner-*.json`),
-  and nothing compares the two. A change to claim, row, release, start, renew, finish or roster is
-  made in both repositories. Don't change the SQL text here on its own.
-- **A gate route's request field names are the contract**, not the column names or this generator's
-  variable names. `finish` binds `data.req.result` and `data.req.engine_digest`. Send other names
+- **A runner reaches the queue one way: Soma's gate.** Every statement is a call to `/v1/runner/*`,
+  and this machine holds no database credential. `open` normalises the claim into `data.claimed`,
+  `data.row`, `data.token` and `data.ct` (the execution contract), and nothing below it knows how
+  the row arrived. There was a second, `db` path until the statements were deleted; the gate's are
+  the only copy now, and `soma/scripts/verify/run.sh` reads each one out of the workflow that ships
+  it, so no second copy can drift.
+- **A gate route's request field names are the contract**, not the column names. `finish` binds `data.req.result` and `data.req.engine_digest`. Send other names
   and the route binds nulls and answers `409 claim_lost`. Run `grep data.req.` in the route before
   changing a request body here.
 - **The renew's two failures differ in `api` mode** (`RENEW_LOST`). `applied: false` means the claim
   is gone, so halt. A call that never arrived means almost nothing, so play on: the lease outlasts
   the renew interval, and a lost claim is refused at finish. Don't collapse them.
-- **Everything is fenced on one claim token.** In `db` mode `token` mints it; in `api` mode the gate
-  does and returns it on `claim.token`. `db_write` returns only `rows_affected`, which is how a fenced
-  statement learns its fate (`wrote()`). Through the gate the route answers the same fact as a field
-  (`applied`, `started`, `state`).
+- **Everything is fenced on one claim token.** The gate mints it and returns it on `claim.token`;
+  a runner never invents one. Each fenced route answers its own fate as a field -- `applied`,
+  `started`, `state` -- and a task that reads the wrong one cannot tell a lost claim from a win.
 - **The match channel is ONE channel with `slots`.** `{"policy": "forbid", "key": "match", "slots":
   N}` admits up to N runs of that key at once, where `forbid` used to mean exactly one — so the four
   cloned channels that differed only in `channel_id` and `concurrency.key` are gone. A run reads its
@@ -76,7 +72,7 @@ identically, not just recorded.
 - **An admitting runner executes and never decides.** It registers the registration Soma rebuilt,
   never the competitor's manifest; sends Orion's admission record and stats as they came, and the
   probe's tally; and judges nothing, not a stage, a budget or a timing. Whose fault a refusal is, is
-  Soma's `admission_facts()`. `tb-admit` is `api` only: there is no `db` copy to keep in step.
+  Soma's `admission_facts()`.
 - **The admission node keeps nothing between walks**: `tb-admit` deletes what it registered, and a
   409 on `register` clears a dead walk's leftover. Never archive instead: Orion activates only a
   `draft`, so an archived model can never be admitted again.
@@ -127,15 +123,17 @@ Orion:
 
 - **`package apply` stops at the first workflow it can't activate**, and everything after it stays a
   draft — a draft cron channel has no schedule. That used to leave `/readyz` green on a node serving
-  nothing, which is why the entrypoint counted active `pkg:kalam` channels and killed the node.
+  nothing, which is why the entrypoint used to count this package's active channels and kill the
+  node itself.
   `[packages] apply` is that invariant now: `/readyz` answers 503 (`components.packages: "applying"`)
   until every listed package is serving, and any failure — including a member the reload quarantines
   — exits the process non-zero.
 - **An absent `env://` skips the connector, and SINCE 1.9.0 SO DOES AN EMPTY ONE.** An endpoint is
   scheme-checked again after its references resolve, so `""` is refused ("uses no scheme") exactly as
   `ftp://` would be. A workflow that names a skipped connector can't activate, and a connector needs
-  **every** `env://` it names — so compose gives the `db`-mode variables well-formed URLs that route
-  nowhere (`.invalid`, RFC 2606) rather than the empty strings that used to be enough.
+  **every** `env://` it names — so a variable a shipped connector reads must be set, and set to
+  something well-formed. `RUNNER_BLOB_ENDPOINT` is the one to watch: `kalam-blobs-put` names it and
+  `put` names that connector, so an unset one stops the node rather than failing a replay.
 - **A connector resolves `env://NAME` only when it is the whole string.** `"Bearer env://X"` is a
   literal, so `kalam-orion` reads the whole header from `ORION_ADMIN_BEARER`.
 - **An http connector's `url` CAN be `env://` now, and any connector boolean can be a reference.**
@@ -206,7 +204,7 @@ JSONLogic (datalogic):
 
 Other:
 
-- **A generator change that never reached an image changes nothing.** Rebuild after any edit.
+- **A definition change that never reached an image changes nothing.** Rebuild after any edit.
 - **`tinybrains conform` compares an allowlist of fields that excludes `seats`**, so the
   non-reproducible cost counters in a replay can't break conformance. Keep anything
   non-deterministic out of the other fields.
@@ -218,20 +216,3 @@ Other:
   exact form.
 - **`models.max_probe_ms` is pinned in `runner.toml.tmpl`**, because the admitting runner admits
   under it and every match runner's roster re-admits the same versions under it.
-
-## Removing db mode
-
-Delete it once the api path has proven itself. It goes as one change:
-
-- [ ] `connectors/kalam-db.json` and `connectors/kalam-blobs.json`
-- [ ] in `workflows/tb-match-run.json` and `tb-roster-run.json`: the `db`-mode tasks (`reap`,
-      `claim`, `row`, `release`, `start`, `renew`, `presign`, `finish`, `roster`), their
-      `sql/tb-*.sql` files, the `db` arm of every `{"if": [<api mode>, …]}`, and the `[vars]`-built
-      `data.ct` and its `vars` checks
-- [ ] `docker/replica-db.toml.tmpl`, and `mode` in `runner.toml.tmpl`
-- [ ] `docker-compose.yml`: the five `db`-mode placeholder variables
-- [ ] `scripts/check-sql.sh`, since the package would ship no SQL
-- [ ] web's `scripts/check/configs.sh`: the execution-contract block, and point its other
-      `replica-db.toml.tmpl` checks (ops budget, Orion version, drain, no cluster) at `runner.toml.tmpl`
-- [ ] `scripts/check-defs.sh`: point `clippy -c` at `runner.toml.tmpl`, which can then declare every
-      `[vars]` the package reads — the reason it is checked against `replica-db.toml.tmpl` today

@@ -1,7 +1,7 @@
 # kalam
 
-Kalam is the TinyBrains match runner. It is an Orion 1.9.0 package (cron channels, generated
-workflows, connectors) shipped inside a runnable image, `ghcr.io/tiny-brains/kalam`: orion-server,
+Kalam is the TinyBrains match runner. It is an Orion 1.9.0 package (cron channels, workflows,
+connectors) shipped inside a runnable image, `ghcr.io/tiny-brains/kalam`: orion-server,
 the package, and the Ants engine from one ants release. A runner claims queued matches through
 [Soma](https://github.com/Tiny-Brains/soma)'s runner gate, plays them turn by turn on Orion's own
 model runtime, and posts the result and the replay back. The same image in its other role, an
@@ -97,9 +97,8 @@ Set in `.env`. [`docker-compose.yml`](docker-compose.yml) refuses to start witho
 | `ADMIT_CPUS`, `ADMIT_MEMORY` | `2`, `0` | The admitting runner's limits (`--profile admit`). The CPU ceiling keeps it off the cores the runner beside it plays on |
 | `ADMIT_ADMIN_PORT` | `8091` | The admitting runner's loopback port |
 
-Compose also sets values you should not override: `KALAM_DB_URL`, `R2_BUCKET`, `R2_ACCESS_KEY` and
-`R2_SECRET_KEY` are set to the empty string, so the `db`-mode connectors resolve and are never used;
-`ORION_ADMIN_BEARER` is `Bearer ${ORION_ADMIN_KEY}`; `R2_ENDPOINT` comes from `RUNNER_BLOB_ENDPOINT`.
+Compose also sets one value you should not override: `ORION_ADMIN_BEARER` is
+`Bearer ${ORION_ADMIN_KEY}`. This machine holds no bucket credential and no database credential.
 
 The node's Orion config is [`docker/runner.toml.tmpl`](docker/runner.toml.tmpl): api mode, the
 engine digest (derived by the entrypoint from the component), the model cache, `engine.ops_budget`,
@@ -249,15 +248,15 @@ while it is plainly switched on.
 
 ## Developing the package
 
-Everything is authored JSON and committed: `workflows/`, `channels/`, `connectors/`, `sql/` and
-`shared/`. There is no generator and no build step — `orion-server compile` resolves `$from`, `$use`,
-`$each` and `$sql` into what the admin API accepts. The per-seat tasks are written ONCE, over
+Everything is authored JSON and committed: `workflows/`, `channels/`, `connectors/` and `shared/`.
+There is no generator and no build step — `orion-server compile` resolves `$from`, `$use` and
+`$each` into what the admin API accepts. The package ships no SQL: every statement a runner needs
+is a call to Soma's gate. The per-seat tasks are written ONCE, over
 `constants.seats`. [CLAUDE.md](CLAUDE.md) has the rules and the Orion gotchas.
 
 | Command | What it does | Needs |
 |---|---|---|
-| `./scripts/check-defs.sh` | `orion-server lint`, `clippy`, `fmt --check` over the whole set, and `clippy -c docker/replica-db.toml.tmpl` (all `--deny-warnings`) | `orion-server` in `shared/package.json`'s range, on `PATH` |
-| `./scripts/check-sql.sh` | `orion-server sql check` against a scratch schema built from Soma's migrations, as the `kalam` role, and asserts the grants that role must NOT have | Docker (or `SQLCHECK_DATABASE`); `../soma/migrations` (override with `MIGRATIONS`) |
+| `./scripts/check-defs.sh` | `orion-server lint`, `clippy`, `fmt --check` over the whole set, and `clippy -c docker/runner.toml.tmpl` (all `--deny-warnings`) | `orion-server` in `shared/package.json`'s range, on `PATH` |
 | `docker compose up -d --build` | Builds this checkout and runs it as a runner | Docker and a Soma |
 | `ORION_ADMIN=… ORION_ADMIN_API_KEY=… ./scripts/load-package.sh [--prune]` | Shapes this role's package, compiles it and applies it into a running node; `--prune` retires what the applied version carried and this one does not. `--compile-only -o <file>` stops after compiling, which is what `entrypoint.sh` calls at boot | `orion-server` |
 
@@ -266,8 +265,7 @@ Everything is authored JSON and committed: `workflows/`, `channels/`, `connector
 - Lint checks the engine calls too when the engine is present in the gitignored `plugins/tb-ants/`:
   copy `tb-ants.wasm`, `plugin.toml`, `plugin.json` and `cartridge.json` there from an ants release
   archive or from `../ants/dist/`.
-- There are no unit tests. Lint and `check-sql.sh` are the compiler, and neither exercises leases or
-  turns. A real match needs a Soma: web's stack plus this runner. `tinybrains conform` re-runs a
+- There are no unit tests. Lint is the compiler, and it does not exercise leases or turns. A real match needs a Soma: web's stack plus this runner. `tinybrains conform` re-runs a
   replay locally and diffs every field and every turn.
 - After any change, rebuild (`docker compose up -d --build`). A runner started from an older image
   is still running the old package.
@@ -297,18 +295,14 @@ connectors/                    authored connector definitions
   kalam-api.json               Soma's runner gate; URL from KALAM_API_URL at load
   kalam-orion.json             this node's own admin API, where its model set lives
   kalam-models.json            the models bucket, read-only
-  kalam-blobs-put.json         the replay PUT to a presigned URL; base URL from R2_ENDPOINT
-  kalam-db.json                db mode only: Postgres as the kalam role
-  kalam-blobs.json             db mode only: signs replay PUTs itself
+  kalam-blobs-put.json         the replay PUT to a presigned URL; base URL from RUNNER_BLOB_ENDPOINT
 shared/kalam.json              shared constants: clock tracing, the channels' configs, the token call
 shared/package.json            the package's name and the Orion range it needs
 workflows/                     tb-match-run, tb-roster-run, tb-admit-run -- authored, with the
                                per-seat tasks written once over constants.seats with $each
 channels/                      tb-match (its slots are the matches at once), tb-roster, tb-admit
-sql/                           the statements the workflows name with {"$sql": ...}
 scripts/
   check-defs.sh                no-stack gate: clippy (which gates on lint), fmt, clippy -c
-  check-sql.sh                 sql check as the kalam role; assert the grants it must NOT have
   load-package.sh              shape this role's package (which channels, how many slots),
                                compile it, apply it; --prune retires what a version dropped.
                                entrypoint.sh calls it with --compile-only at boot
@@ -317,21 +311,21 @@ docker/
                                node's package via load-package.sh, exec orion-server (which
                                applies it and holds /readyz until it serves)
   runner.toml.tmpl             the runner's Orion config
-  replica-db.toml.tmpl         db-mode config: run by nothing, kept for the rollback and web's check
 Dockerfile                     the runner image: orion-server, the package, the engine from an ants release
 docker-compose.yml             one runner service, and `admit` under --profile admit
 docker-compose.prod.yml        the same runner for a production deployment
 .env.example                   a runner's settings
 .env.prod.example              a production runner's settings
 .github/workflows/release.yml  v* tag → ghcr.io/tiny-brains/kalam
-workflows/, channels/          generated (gitignored)
 plugins/tb-ants/               optional local engine for lint (gitignored)
 ```
 
 ## Invariants
 
-- **Kalam writes execution columns only.** Soma's migrations grant the `kalam` role claim, lease,
-  result and replay columns. `check-sql.sh` fails if the role can write `matches.rated_at`, read
+- **Kalam writes execution columns only, and no longer holds a credential to write them with.**
+  Every write is a gate call, and the gate's own role (`runner_gate`) is granted claim, lease,
+  result and replay columns and nothing else. Soma's `scripts/check-sql.sh` fails if that role --
+  or the now-unused `kalam` role the migrations still create -- can write `matches.rated_at`, read
   `ratings`, or read a verdict column of `model_versions`. A wider grant would let a runner move
   the ladder.
 - **Every write is fenced on the claim token.** Start, renew, release and finish all carry

@@ -47,16 +47,11 @@ orion-server fmt --check .
 # SAYING SO, giving the model less time than the match is scored against. Without -c the rules are
 # SKIPPED, which reads as a pass.
 #
-# AGAINST replica-db.toml.tmpl, NOT runner.toml.tmpl, and the reason is worth knowing. The package
-# still carries its `db`-mode branch as the rollback, and those tasks read `[vars]` a runner has no
-# business declaring -- `lease_seconds`, `turn_ms`, `model_prefix` and the rest of the execution
-# contract, which in `api` mode rides the claim instead. runner.toml.tmpl therefore declares none
-# of them, and checking against it reports the whole rollback path as reading nulls. replica-db's
-# [vars] is the superset, so it is the config that can say anything true about the set.
-#
-# THE TWO TEMPLATES' `[models]` BOUNDS MUST STAY EQUAL for that substitution to be sound, since
-# `model_timeout_clamped` is about `max_timeout_ms`. web's scripts/check/configs.sh is what holds
-# them together. When `db` mode goes, this moves to runner.toml.tmpl and the coupling goes with it.
+# AGAINST runner.toml.tmpl, which is now the only config this repository ships and the one every
+# image copies. It used to run against replica-db.toml.tmpl, whose `[vars]` was a superset, because
+# the package carried a `db`-mode branch reading `lease_seconds`, `turn_ms`, `model_prefix` and the
+# rest of the execution contract. That branch is gone -- the contract rides the claim -- so the set
+# reads exactly the seven vars a runner declares, and the two-template coupling went with it.
 #
 # STAND-IN VALUES FOR WHAT THE TEMPLATE REQUIRES: `${NAME:?message}` stops a boot when the variable
 # is unset or empty, which is what it is for; this is a static check, not a boot, so it supplies
@@ -68,7 +63,6 @@ ORION_ADMIN_KEY=check-defs-not-a-key \
 KALAM_ENGINE_DIGEST=sha256:0000000000000000000000000000000000000000000000000000000000000000 \
 TB_TRUST_PUBLIC_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAI= \
 RUNNER_ARCH=arm64 \
-R2_ENDPOINT=http://check-defs:9000 \
-  orion-server clippy . -c docker/replica-db.toml.tmpl --deny-warnings
+  orion-server clippy . -c docker/runner.toml.tmpl --deny-warnings
 
 echo "==> Kalam's definitions are clean"

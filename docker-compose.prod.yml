@@ -54,17 +54,9 @@ services:
       # connector's `env://` resolves to nothing, the connector is skipped, `put` cannot activate
       # and the boot apply stops the node.
       RUNNER_BLOB_ENDPOINT: ${R2_S3_ENDPOINT}
-      R2_ENDPOINT: ${R2_S3_ENDPOINT}
       # An R2 API token with Object Read on the models bucket and nothing else.
       MODELS_READ_ACCESS_KEY: ${MODELS_READ_ACCESS_KEY:?the deployment's read-only models token}
       MODELS_READ_SECRET_KEY: ${MODELS_READ_SECRET_KEY:?the deployment's read-only models token}
-
-      # EMPTY, NOT ABSENT, as in docker-compose.yml: `kalam-db` and `kalam-blobs` must resolve to exist,
-      # and every task naming them is gated on `mode != "api"`.
-      KALAM_DB_URL: ""
-      R2_BUCKET: ""
-      R2_ACCESS_KEY: ""
-      R2_SECRET_KEY: ""
 
       PLUGIN_SIG_DIR: /sig
       TB_TRUST_PUBLIC_KEY: ${TB_TRUST_PUBLIC_KEY:?copy it from the deployment}
