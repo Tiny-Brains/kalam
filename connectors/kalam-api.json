@@ -2,7 +2,7 @@
   "id": "kalam-api",
   "name": "kalam-api",
   "connector_type": "http",
-  "tags": ["pkg:kalam"],
+  "tags": ["kalam", "conn", "platform"],
   "config": {
     "type": "http",
     "url": "env://KALAM_API_URL",

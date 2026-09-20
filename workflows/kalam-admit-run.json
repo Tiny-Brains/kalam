@@ -1,8 +1,8 @@
 {
-  "workflow_id": "tb-admit-run",
+  "workflow_id": "kalam-admit-run",
   "name": "Kalam: admit one submission",
   "description": "An ADMITTING runner's clock (RUNNER_ROLE=admit). Claims one submission Soma's admit clock prepared, registers it on this node from the registration Soma rebuilt, lets Orion admit it, activates it, plays it over the reference observations the claim carried -- one a sweep -- deletes it, and reports Orion's record, its stats and the probe's tally to the gate. Soma judges the report; nothing here decides whose fault anything is. A run that dies reports nothing, and the lease lapsing hands the row to the next claim.",
-  "tags": ["pkg:kalam"],
+  "tags": ["kalam", "clock", "admission"],
   "condition": true,
   "loop": { "counter": "i", "max": 64 },
   "tasks": [

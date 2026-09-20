@@ -3,12 +3,12 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 `kalam` ships **no server code**. It is an Orion **1.9.0** package, which the orion-server in its
-runner image applies to itself at boot (`[packages] apply`). It has three clocks. **`tb-match`** is
+runner image applies to itself at boot (`[packages] apply`). It has three clocks. **`kalam-match`** is
 ONE channel whose `concurrency.slots` is how many matches this node plays at once, each run of
-`tb-match-run`: claim ONE queued row, then `observe` → one `model_infer` per live seat
-→ `step` until the engine stops returning views, then finish the row in place. **`tb-roster`**
+`kalam-match-run`: claim ONE queued row, then `observe` → one `model_infer` per live seat
+→ `step` until the engine stops returning views, then finish the row in place. **`kalam-roster`**
 registers, admits and activates on this node every version the ladder says is verified or active.
-**`tb-admit`** is an admitting runner's only clock (`RUNNER_ROLE=admit`): claim one submission Soma
+**`kalam-admit`** is an admitting runner's only clock (`RUNNER_ROLE=admit`): claim one submission Soma
 prepared, register it, let Orion admit it, play it over the reference observations, delete it and
 report. Soma runs no model and judges the report.
 Everything is authored JSON and committed — `workflows/`, `channels/`, `connectors/`, `sql/`,
@@ -63,7 +63,7 @@ identically, not just recorded.
   before it is applied.
 - **A runner has one role** (`RUNNER_ROLE`), and **`scripts/load-package.sh` is the one place that
   knows what a role's package looks like.** `match` gets the match channel and the roster; `admit`
-  gets `tb-admit` alone, one cron worker, so an admission never shares a node with a match and its
+  gets `kalam-admit` alone, one cron worker, so an admission never shares a node with a match and its
   probe is never timed under a match's load. It shapes a COPY, so the image's own tree is never
   written to and a restart shapes it the same way whatever the last boot did. All three workflows
   ship either way: a workflow with no channel never runs.
@@ -73,7 +73,7 @@ identically, not just recorded.
   never the competitor's manifest; sends Orion's admission record and stats as they came, and the
   probe's tally; and judges nothing, not a stage, a budget or a timing. Whose fault a refusal is, is
   Soma's `admission_facts()`.
-- **The admission node keeps nothing between walks**: `tb-admit` deletes what it registered, and a
+- **The admission node keeps nothing between walks**: `kalam-admit` deletes what it registered, and a
   409 on `register` clears a dead walk's leftover. Never archive instead: Orion activates only a
   `draft`, so an archived model can never be admitted again.
 - **The worker pool is the slots plus one, and the one is the roster's.** Orion has one cron pool
@@ -155,11 +155,11 @@ Orion:
 - **A cron occurrence's `data` is unreadable**: it returns nowhere, and a trace carries no per-task
   detail (and is dropped above `trace_queue.max_result_size_bytes`). A failing run can be diagnosed
   only by *which* task failed.
-- **Keep `task_details: false` on the match channel and on `tb-admit`.** With it on, Orion builds a
+- **Keep `task_details: false` on the match channel and on `kalam-admit`.** With it on, Orion builds a
   full trace of every write, the per-seat policy tensors included, outside `max_snapshot_bytes`, and
   `errors_only` drops it only after it has been built and serialized. A runner's memory then grows by
   gigabytes.
-- **Loop bounds.** `tb-match-run` loops at most `MATCH_LOOP_MAX` (1010) sweeps: one per turn plus
+- **Loop bounds.** `kalam-match-run` loops at most `MATCH_LOOP_MAX` (1010) sweeps: one per turn plus
   the finishing sweep, so it is also the ceiling on `max_turns`, which Soma's `season_rule_spec()`
   caps at 1000 to match. web's `configs.sh` reads the `MATCH_LOOP_MAX = <n>` line, so keep that
   exact form. `[engine] max_loop_iterations` must sit above it. The
@@ -167,7 +167,7 @@ Orion:
   force timeout (2700 s) must stay above it.
 - **`models.max_timeout_ms` clamps `model_infer`'s deadline silently.** It must be at least the
   season ceiling for `turn_ms`.
-- **Model preload.** `preload = "referenced"` warms only literal model ids, and `tb-match` computes
+- **Model preload.** `preload = "referenced"` warms only literal model ids, and `kalam-match` computes
   its model id. That is why the roster tags every registration `ladder` and the config sets
   `preload_tags`.
 - **Replay PUT.** `storage_presign` returns a plain string. `http_call` always prefixes the
@@ -210,7 +210,7 @@ Other:
   non-deterministic out of the other fields.
 - **`engine.ops_budget` must equal Soma's `adapter_ops_max`,** and `orion_version` must equal Soma's.
   web's `configs.sh` checks both, and the admission claim refuses a runner on another Orion.
-- **`ADMIT_LOOP_MAX` must reach Soma's `admit_observations`.** `tb-admit` plays one observation a
+- **`ADMIT_LOOP_MAX` must reach Soma's `admit_observations`.** `kalam-admit` plays one observation a
   sweep and reports on the last; a claim carrying more stops at the loop's end with no report, and
   every submission expires. web's `configs.sh` reads the `ADMIT_LOOP_MAX = <n>` line, so keep that
   exact form.

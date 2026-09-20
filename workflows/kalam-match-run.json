@@ -1,8 +1,8 @@
 {
-  "workflow_id": "tb-match-run",
+  "workflow_id": "kalam-match-run",
   "name": "Kalam: one match, turn by turn",
   "description": "Claim ONE queued row on this replica's engine digest and play it: observe, one `model_infer` per live seat, step, until the engine stops returning views. The row is finished in place, with its replay under a key naming the attempt. Every statement is conditioned on the claim token, so a stale attempt updates nothing. It reads no rating and writes no rating, and its database role cannot reach one. In `api` mode every statement is a call to Soma's runner gate (/v1/runner/*). On SIGTERM Orion stops claiming and lets the match in hand finish inside cron.shutdown_timeout_secs.",
-  "tags": ["pkg:kalam"],
+  "tags": ["kalam", "clock", "matches"],
   "condition": true,
   "loop": { "counter": "i", "max": 1010 },
   "tasks": [

@@ -13,7 +13,7 @@
 # that is not a runner, a runner has stopped being something you can put on a desk.
 #
 # `admit` IS THE SAME RUNNER IN ITS OTHER ROLE, and only under `--profile admit`: the image, the key
-# and every address are the runner's, and RUNNER_ROLE=admit makes it load tb-admit and nothing else.
+# and every address are the runner's, and RUNNER_ROLE=admit makes it load kalam-admit and nothing else.
 # Soma runs no model, so admission waits until one of these is up somewhere -- one per deployment is
 # enough, on whichever machine plays the fewest matches, and a second only shares the queue.
 #
@@ -157,7 +157,7 @@ services:
     environment:
       RUNNER_ROLE: admit
       RUNNER_LABEL: ${RUNNER_LABEL:-runner}-admit
-      # One admission is bounded by tb-admit's own ten minutes, so a stop waits for that and no more.
+      # One admission is bounded by kalam-admit's own ten minutes, so a stop waits for that and no more.
       ORION_SHUTDOWN_FORCE_SECS: "630"
       ORION_CRON_SHUTDOWN_SECS: "630"
     volumes:

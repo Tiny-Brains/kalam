@@ -78,7 +78,7 @@ runner_label = "${RUNNER_LABEL:-runner}"
 arch         = "${RUNNER_ARCH}"
 node_version = "${RUNNER_NODE_VERSION:-dev}"
 
-# Read by nothing in the package: the lanes this node plays are the tb-match channels entrypoint.sh
+# Read by nothing in the package: the lanes this node plays are the kalam-match channels entrypoint.sh
 # lets entrypoint.sh write into the match channel's `slots` (RUNNER_CRON_WORKERS), and cron.workers below
 # is those lanes plus the roster's own worker.
 match_concurrency = 4
@@ -135,7 +135,7 @@ enabled = true
 public_keys = ["${TB_TRUST_PUBLIC_KEY}"]
 
 # ONNX AS A GOVERNED ENTITY. A match runner registers, admits and activates every model its
-# `tb-roster` clock is told about -- over the gate, so it never reads model_versions itself --
+# `kalam-roster` clock is told about -- over the gate, so it never reads model_versions itself --
 # then plays them with `model_infer`. An admitting runner registers one submission at a
 # time from the admission it claimed, probes it and deletes it. There is no sidecar and no loader: the artifact is
 # fetched from the bucket by connector and digest, HASHED AGAINST WHAT THE ROSTER DECLARED, and
@@ -150,7 +150,7 @@ cache_dir = "/var/lib/orion/models"
 max_cache_bytes  = ${RUNNER_MAX_CACHE_BYTES:-4294967296}
 max_loaded_bytes = ${RUNNER_MAX_LOADED_BYTES:-2147483648}
 
-# `referenced` warms what a workflow names by LITERAL id, and tb-match names its model with a
+# `referenced` warms what a workflow names by LITERAL id, and kalam-match names its model with a
 # `{"var": ...}` -- so it would warm nothing. The roster clock tags every registration `ladder`,
 # and this is what turns that tag into a warm session at boot.
 preload = "referenced"
@@ -190,7 +190,7 @@ max_timeout_ms = ${RUNNER_MAX_TIMEOUT_MS:-60000}
 # to it, so neither surprises.
 shutdown_timeout_secs = ${ORION_CRON_SHUTDOWN_SECS:-2700}
 
-# THE MATCH LANES AND ONE MORE, FOR THE ROSTER -- or, on an admitting runner, one: tb-admit's.
+# THE MATCH LANES AND ONE MORE, FOR THE ROSTER -- or, on an admitting runner, one: kalam-admit's.
 # RUNNER_CRON_WORKERS is how many matches this machine plays at once, and entrypoint.sh loads exactly
 # that many match lanes (the package ships four, each `forbid` on its own key, so a lane holds at
 # most one worker). This is those lanes plus one, and the plus one is the roster's: Orion has ONE
@@ -201,7 +201,7 @@ shutdown_timeout_secs = ${ORION_CRON_SHUTDOWN_SECS:-2700}
 workers = ${KALAM_CRON_WORKERS:-3}
 
 [engine]
-# Must sit above tb-match-run's own loop max, which is what actually bounds a match's sweeps (and
+# Must sit above kalam-match-run's own loop max, which is what actually bounds a match's sweeps (and
 # so its turns).
 max_loop_iterations = 10000
 

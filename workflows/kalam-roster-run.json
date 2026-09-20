@@ -1,8 +1,8 @@
 {
-  "workflow_id": "tb-roster-run",
+  "workflow_id": "kalam-roster-run",
   "name": "Kalam: reconcile this node's model set",
   "description": "Every version the ladder says is verified or active, registered, admitted and activated ON THIS NODE. Models are a state-database entity and each replica is its own Orion with its own state database, so a roster is per node -- and a clock that reconciles from the shared schema needs no replica list anywhere, which is what keeps any clock from ever calling a replica. One step per item per tick: registration queues admission, and a later tick activates what passed. Nothing here writes to the platform schema; its database role has SELECT and nothing else on model_versions.",
-  "tags": ["pkg:kalam"],
+  "tags": ["kalam", "clock", "models"],
   "condition": true,
   "loop": { "counter": "i", "max": 256 },
   "tasks": [

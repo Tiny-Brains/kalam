@@ -66,7 +66,7 @@ echo "==> private addresses: $KALAM_ALLOW_PRIVATE_URLS"
 
 # ---------------------------------------------------------------- the role
 # WHAT THIS MACHINE DOES, AND A RUNNER DOES ONE OR THE OTHER. `match` (the default) plays matches:
-# its lanes and the roster clock. `admit` admits submissions for Soma's admit clock: the tb-admit
+# its lanes and the roster clock. `admit` admits submissions for Soma's admit clock: the kalam-admit
 # lane and nothing else, so an admission never takes CPU from a match on the same node, and its
 # probe is not timed under a match's load. load-package.sh leaves the other role's channels out.
 KALAM_ROLE="${RUNNER_ROLE:-match}"
@@ -88,7 +88,7 @@ esac
 if [ "$KALAM_ROLE" = admit ]; then
   KALAM_MATCH_LANES=0
   KALAM_CRON_WORKERS=1
-  echo "==> an admitting runner: the tb-admit channel, 1 cron worker, no match lanes"
+  echo "==> an admitting runner: the kalam-admit channel, 1 cron worker, no match lanes"
 else
   lanes="${RUNNER_CRON_WORKERS:-2}"
   case "$lanes" in

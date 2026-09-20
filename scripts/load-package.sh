@@ -23,7 +23,7 @@
 # epoch bus between them, so each node applies against itself.
 #
 # WHICH CHANNELS: a node's role decides. `match` gets the match channel and the roster, `admit`
-# gets tb-admit alone, and `KALAM_MATCH_LANES` is the match channel's `slots` -- one channel bounded
+# gets kalam-admit alone, and `KALAM_MATCH_LANES` is the match channel's `slots` -- one channel bounded
 # at N, where before Orion 1.9.0 it was N cloned channels a generator wrote.
 #
 # WHAT THIS SCRIPT NO LONGER DOES, because Orion 1.9.0 does it: a staged copy of the set (connector
@@ -82,13 +82,13 @@ rm -rf "$SET/scripts" "$SET/docker"
 
 echo "==> shaping the package for a $ROLE runner"
 if [ "$ROLE" = admit ]; then
-  rm -f "$SET/channels/tb-match.json" "$SET/channels/tb-roster.json"
+  rm -f "$SET/channels/kalam-match.json" "$SET/channels/kalam-roster.json"
 else
-  rm -f "$SET/channels/tb-admit.json"
+  rm -f "$SET/channels/kalam-admit.json"
   if [ -n "${KALAM_MATCH_LANES:-}" ]; then
     # `slots` is a literal in the channel, because Orion takes lock cardinality as an authoring
     # decision. The shipped value is the maximum; this is the number THIS node plays.
-    ch="$SET/channels/tb-match.json"
+    ch="$SET/channels/kalam-match.json"
     sed "s/\"slots\": [0-9][0-9]*/\"slots\": $KALAM_MATCH_LANES/" "$ch" > "$ch.tmp" && mv "$ch.tmp" "$ch"
     grep -q "\"slots\": $KALAM_MATCH_LANES" "$ch" || {
       echo "could not set the match channel to $KALAM_MATCH_LANES slot(s)" >&2; exit 1; }

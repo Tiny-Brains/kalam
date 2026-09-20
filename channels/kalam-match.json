@@ -1,10 +1,10 @@
 {
-  "channel_id": "tb-match",
-  "name": "tb-match",
-  "tags": ["pkg:kalam"],
+  "channel_id": "kalam-match",
+  "name": "kalam-match",
+  "tags": ["kalam", "clock", "matches"],
   "channel_type": "async",
   "protocol": "cron",
-  "workflow_id": "tb-match-run",
+  "workflow_id": "kalam-match-run",
   "transport_config": {
     "schedule": "*/5 * * * * *",
     "timezone": "UTC",

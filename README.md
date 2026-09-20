@@ -38,7 +38,7 @@ the server:
 **`/readyz` answers 503 until the package is serving**, and any failure applying it stops the
 container non-zero — a runner that cannot claim is never reported as capacity. If it stops, the
 reason is the last error in the log: see [Troubleshooting](#troubleshooting). The admitting runner
-(`docker compose logs -f admit`) logs `==> an admitting runner: the tb-admit channel, 1 cron worker,
+(`docker compose logs -f admit`) logs `==> an admitting runner: the kalam-admit channel, 1 cron worker,
 no match lanes`.
 
 **Against web's local stack** (bring it up first, as [web](https://github.com/Tiny-Brains/web)'s
@@ -175,7 +175,7 @@ That file never builds, never lets `RUNNER_ALLOW_PRIVATE_URLS` through, runs Ori
 
 `docker compose --profile admit up -d` starts `admit` beside `runner`: the same image, key and
 addresses, labelled `<RUNNER_LABEL>-admit` on the Runners screen, with its own model cache. With
-`RUNNER_ROLE=admit` it loads `tb-admit` and nothing else. Every 10 s it claims one submission Soma
+`RUNNER_ROLE=admit` it loads `kalam-admit` and nothing else. Every 10 s it claims one submission Soma
 prepared (`POST /v1/runner/admissions/claim`), registers it on its own node from the registration
 Soma rebuilt, lets Orion admit it, plays it over up to 64 reference observations, deletes it, and
 reports (`POST /v1/runner/admissions/{id}/report`). Soma decides.
@@ -298,9 +298,9 @@ connectors/                    authored connector definitions
   kalam-blobs-put.json         the replay PUT to a presigned URL; base URL from RUNNER_BLOB_ENDPOINT
 shared/kalam.json              shared constants: clock tracing, the channels' configs, the token call
 shared/package.json            the package's name and the Orion range it needs
-workflows/                     tb-match-run, tb-roster-run, tb-admit-run -- authored, with the
+workflows/                     kalam-match-run, kalam-roster-run, kalam-admit-run -- authored, with the
                                per-seat tasks written once over constants.seats with $each
-channels/                      tb-match (its slots are the matches at once), tb-roster, tb-admit
+channels/                      kalam-match (its slots are the matches at once), kalam-roster, kalam-admit
 scripts/
   check-defs.sh                no-stack gate: clippy (which gates on lint), fmt, clippy -c
   load-package.sh              shape this role's package (which channels, how many slots),
@@ -345,7 +345,7 @@ plugins/tb-ants/               optional local engine for lint (gitignored)
   kind a refused row after the fresh ones.
 - **The roster always has a worker.** Orion's pool is the match slots plus one, and only
   `RUNNER_CRON_WORKERS` lanes load, so no number of long matches can skip a roster tick.
-- **A runner has one role.** A match runner loads no `tb-admit`, and an admitting runner loads
+- **A runner has one role.** A match runner loads no `kalam-admit`, and an admitting runner loads
   nothing else, so an admission never shares a node with a match.
 - **An admitting runner reports and never decides.** It registers what Soma rebuilt, never the
   competitor's manifest, deletes what it registered, and sends Orion's record as it answered.
@@ -368,7 +368,7 @@ plugins/tb-ants/               optional local engine for lint (gitignored)
   refused anything for real.
 - Mixed-engine rollout, where runners on two digests drain and claim past each other, has never been
   exercised.
-- `tb-match-run` keeps sweeping to its loop max (1010) after the match finishes, with every task
+- `kalam-match-run` keeps sweeping to its loop max (1010) after the match finishes, with every task
   skipped.
 - A new version's first registration logs an ERROR: the roster's existence check is a GET that
   404s, and so is the barrier's check while a claimed trial waits for it. Orion's `http_call`
@@ -382,9 +382,9 @@ plugins/tb-ants/               optional local engine for lint (gitignored)
 - An admitting runner's idle poll is a token exchange and a claim every 10 s, like a lane's.
 - Every admission runs twice on the admitting runner: Orion queues one when a model is
   registered and `admit?wait=true` runs another inline, and registration has no way to skip the
-  queued one. When the inline one fails fast, `tb-admit` deletes the model before the queued one
+  queued one. When the inline one fails fast, `kalam-admit` deletes the model before the queued one
   finishes, which logs `Model admission could not be recorded` at ERROR.
-- `tb-admit-run` plays one observation a sweep, so a claim carrying more than `ADMIT_LOOP_MAX` (64)
+- `kalam-admit-run` plays one observation a sweep, so a claim carrying more than `ADMIT_LOOP_MAX` (64)
   would stop at the loop's end without a report. Soma's `admit_observations` is held to it by web's
   `configs.sh`.
 - The `db`-mode branch is still in the package as a rollback. CLAUDE.md has the removal checklist.

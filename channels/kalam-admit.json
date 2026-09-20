@@ -1,10 +1,10 @@
 {
-  "channel_id": "tb-admit",
-  "name": "tb-admit",
-  "tags": ["pkg:kalam"],
+  "channel_id": "kalam-admit",
+  "name": "kalam-admit",
+  "tags": ["kalam", "clock", "admission"],
   "channel_type": "async",
   "protocol": "cron",
-  "workflow_id": "tb-admit-run",
+  "workflow_id": "kalam-admit-run",
   "transport_config": {
     "schedule": "*/10 * * * * *",
     "timezone": "UTC",

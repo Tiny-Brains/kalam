@@ -1,10 +1,10 @@
 {
-  "channel_id": "tb-roster",
-  "name": "tb-roster",
-  "tags": ["pkg:kalam"],
+  "channel_id": "kalam-roster",
+  "name": "kalam-roster",
+  "tags": ["kalam", "clock", "models"],
   "channel_type": "async",
   "protocol": "cron",
-  "workflow_id": "tb-roster-run",
+  "workflow_id": "kalam-roster-run",
   "transport_config": {
     "schedule": "*/15 * * * * *",
     "timezone": "UTC",

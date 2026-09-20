@@ -2,7 +2,7 @@
   "id": "kalam-models",
   "name": "kalam-models",
   "connector_type": "storage",
-  "tags": ["pkg:kalam"],
+  "tags": ["kalam", "conn", "models"],
   "config": {
     "type": "storage",
     "provider": "s3",
