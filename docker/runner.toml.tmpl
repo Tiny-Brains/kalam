@@ -160,13 +160,16 @@ preload_tags = ["ladder"]
 # `large` at 64 MiB, and this is that with room for the manifest's own bytes.
 max_artifact_bytes = 67108864
 
-# THE ONE COMPUTE GATE AT ADMISSION: Orion's five zero-filled inferences, median inside this. PINNED,
-# not inherited, because it is admission's only wall-clock verdict and this template is the one an
-# ADMITTING runner (RUNNER_ROLE=admit) admits submissions under -- and the one every match runner's
-# roster admits the same versions under, so a model admitted on one machine is admitted on every
-# other. A probe over it on the admitting runner is sent back to be tried again, never refused
-# (soma's admission_facts): wall clock belongs to the machine that measured it.
-max_probe_ms = 250
+# THE ONE COMPUTE GATE AT ADMISSION: Orion's five zero-filled inferences at the manifest's
+# probe_dims, median inside this. EQUAL TO THE GAME'S TURN, the cartridge's limits.turn_ms, and web's
+# configs.sh checks it: a model whose median inference at the largest board fits a turn can play, so
+# anything stricter refuses a model the game would have let answer, and the book promises no compute
+# cap but the turn. PINNED, not inherited, because this template is the one an ADMITTING runner
+# (RUNNER_ROLE=admit) admits submissions under -- and the one every match runner's roster admits the
+# same versions under, so a model admitted on one machine is admitted on every other. A probe over
+# it goes back to be tried again (soma's admission_facts), because wall clock belongs to the machine
+# that measured it; over it on every attempt, the submission expires PROBE_TOO_SLOW.
+max_probe_ms = 1000
 
 # A 256x256 board of 7 planes is 458,752 elements; the default 1,048,576 already covers every board
 # an upload may be (limits.boards: 124 a side, 14,880 cells), and is stated here so a future board

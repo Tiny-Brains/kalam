@@ -183,7 +183,8 @@ reports (`POST /v1/runner/admissions/{id}/report`). Soma decides.
 - **One per deployment is enough**, and nothing is admitted while none is up: submissions wait in
   `testing` without spending an attempt. A second one only shares the queue.
 - **Put it where matches are fewest.** A probe measured over `max_probe_ms` on a busy machine is sent
-  back to be tried again, and three of those expire the submission `TIMED_OUT`. It plays no match,
+  back to be tried again, and one slow on all three attempts expires the submission
+  `PROBE_TOO_SLOW`. It plays no match,
   so an admission never takes time from one on its own node, and `ADMIT_CPUS` keeps it off the
   runner beside it.
 - **Its Orion must be the one Soma's `orion_version` names**: the claim answers 409
@@ -244,7 +245,8 @@ while it is plainly switched on.
 | Calls to this node's admin API get 401 | `ORION_ADMIN_BEARER` must be the whole `Bearer <key>` header | Leave it as compose sets it |
 | Rows stay `running` after a restart | The drain was cut short: Docker's grace period ran out before Orion's | Keep `RUNNER_STOP_GRACE` above drain + force. The rows are reaped when their lease lapses |
 | Submissions stay `testing` (phase `queued`) | No admitting runner is up, or its claim is refused | Start one with `--profile admit`. A 409 `orion_version_differs` in its log means its image is not on Soma's Orion |
-| A submission expires `TIMED_OUT` | Every attempt's report decided nothing: the runner could not fetch it, ran out of time, measured the probe over `max_probe_ms`, or an inference failed outright | `admissions.requeued_for` names the last reason |
+| A submission expires `TIMED_OUT` | Every attempt's report decided nothing: the runner could not fetch it, ran out of time, or an inference failed outright, or the probe was over `max_probe_ms` on some attempts but not all | `admissions.requeued_for` names the last reason |
+| A submission expires `PROBE_TOO_SLOW` | The probe's median was over `max_probe_ms` (the game's `turn_ms`) on every attempt | The model is slower than a turn at its `probe_dims`; the version's `infer_us` is the last median |
 
 ## Developing the package
 

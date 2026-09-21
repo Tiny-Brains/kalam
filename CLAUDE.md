@@ -215,4 +215,6 @@ Other:
   every submission expires. web's `configs.sh` reads the `ADMIT_LOOP_MAX = <n>` line, so keep that
   exact form.
 - **`models.max_probe_ms` is pinned in `runner.toml.tmpl`**, because the admitting runner admits
-  under it and every match runner's roster re-admits the same versions under it.
+  under it and every match runner's roster re-admits the same versions under it. It equals the
+  cartridge's `limits.turn_ms` (web's `configs.sh` checks it), and `tinybrains check` measures the
+  probe against that same `turn_ms`, so a change to one is a change to all three.
