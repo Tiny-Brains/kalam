@@ -325,10 +325,9 @@ plugins/tb-ants/               optional local engine for lint (gitignored)
 
 - **Kalam writes execution columns only, and no longer holds a credential to write them with.**
   Every write is a gate call, and the gate's own role (`runner_gate`) is granted claim, lease,
-  result and replay columns and nothing else. Soma's `scripts/check-sql.sh` fails if that role --
-  or the now-unused `kalam` role the migrations still create -- can write `matches.rated_at`, read
-  `ratings`, or read a verdict column of `model_versions`. A wider grant would let a runner move
-  the ladder.
+  result and replay columns and nothing else. Soma's `scripts/check-sql.sh` fails if that role can
+  write `matches.rated_at`, read `ratings`, or write a verdict column of `model_versions`. A wider
+  grant would let a runner move the ladder.
 - **Every write is fenced on the claim token.** Start, renew, release and finish all carry
   `claim_token`, so a runner whose lease was reaped writes nothing. The replay key names the attempt
   (`<replay_prefix>/<match>/<claim_token>.json`), so a stale attempt's blob is an orphan, not a
