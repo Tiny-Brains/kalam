@@ -122,6 +122,12 @@ COPY workflows/ /pkg/kalam/workflows/
 # release this image was built with.
 COPY --from=ants /tb-ants.wasm /plugin.json /cartridge.json /plugin.toml /pkg/kalam/plugins/tb-ants/
 
+# TWO MALLOC ARENAS, NOT glibc's 8 PER CORE. orion-server allocates through glibc, which gives each
+# busy thread its own arena and returns almost nothing from one: a runner playing two matches held
+# 10.7 GB, 9.6 GB of it in 64 MB arena heaps, against 160 MB of models. soma's image sets the same;
+# the compose files pass it too, as MALLOC_ARENA_MAX.
+ENV MALLOC_ARENA_MAX=2
+
 USER orion
 EXPOSE 8080
 

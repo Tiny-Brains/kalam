@@ -91,6 +91,9 @@ services:
       RUNNER_CRON_WORKERS: ${RUNNER_CRON_WORKERS:-2}
       RUNNER_MAX_CACHE_BYTES: ${RUNNER_MAX_CACHE_BYTES:-4294967296}
       RUNNER_MAX_LOADED_BYTES: ${RUNNER_MAX_LOADED_BYTES:-2147483648}
+      # Two glibc arenas, as the Dockerfile sets. Uncapped, every busy thread keeps its own and a
+      # runner holds gigabytes it has already freed. Passed here so an image without the ENV gets it.
+      MALLOC_ARENA_MAX: ${MALLOC_ARENA_MAX:-2}
 
     # Must exceed drain + force, or Docker SIGKILLs a draining match and leaves its row `running`.
     stop_grace_period: ${RUNNER_STOP_GRACE:-2760s}

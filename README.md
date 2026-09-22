@@ -84,6 +84,7 @@ Set in `.env`. [`docker-compose.yml`](docker-compose.yml) refuses to start witho
 | `RUNNER_CRON_WORKERS` | `2` | Matches at once: the match channel's `concurrency.slots`, at most the four the package ships. Orion's `cron.workers` is this plus one, for the roster |
 | `RUNNER_MAX_CACHE_BYTES` | 4 GiB | The on-disk model cache (the `runner-models` volume) |
 | `RUNNER_MAX_LOADED_BYTES` | 2 GiB | Model sessions held in memory at once |
+| `MALLOC_ARENA_MAX` | `2` | glibc arenas for orion-server. Uncapped, a busy runner holds gigabytes of memory it has freed |
 | `RUNNER_ALLOW_PRIVATE_URLS` | unset | `1` only against a local stack: lets the connectors reach private addresses |
 | `RUNNER_ADMIN_PORT` | `8090` | Loopback port for this node's `/health` and `/metrics` |
 | `RUNNER_ARCH` | from `uname -m` | Reported on the Runners screen. Leave it unset |
