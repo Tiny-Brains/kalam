@@ -44,6 +44,10 @@ identically, not just recorded.
   the row arrived. There was a second, `db` path until the statements were deleted; the gate's are
   the only copy now, and `soma/scripts/verify/run.sh` reads each one out of the workflow that ships
   it, so no second copy can drift.
+- **The runner's capacity is reported, not configured on Soma.** Every token exchange sends
+  `max_in_flight` = `[vars] match_slots` (the entrypoint's RUNNER_CRON_WORKERS), and Soma's register
+  stores it on the runner's row, which caps how many matches the claim hands this runner. An
+  admitting runner sends `null`, which leaves its row alone.
 - **A gate route's request field names are the contract**, not the column names. `finish` binds `data.req.result` and `data.req.engine_digest`. Send other names
   and the route binds nulls and answers `409 claim_lost`. Run `grep data.req.` in the route before
   changing a request body here.

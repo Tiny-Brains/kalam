@@ -80,10 +80,12 @@ runner_label = "${RUNNER_LABEL:-runner}"
 arch         = "${RUNNER_ARCH}"
 node_version = "${RUNNER_NODE_VERSION:-dev}"
 
-# Read by nothing in the package: the lanes this node plays are the kalam-match channels entrypoint.sh
-# lets entrypoint.sh write into the match channel's `slots` (RUNNER_CRON_WORKERS), and cron.workers below
-# is those lanes plus the roster's own worker.
-match_concurrency = 4
+# THE MATCH SLOTS THIS NODE OPENED, reported at every token exchange as `max_in_flight`: Soma stores
+# it on this runner's row and its claim hands out at most that many matches at once. entrypoint.sh
+# derives it from RUNNER_CRON_WORKERS, the same number it writes into the match channel's `slots`,
+# so the deployment sets capacity in one place. 0 on an admitting runner, which reports none and so
+# leaves its row alone.
+match_slots = ${KALAM_MATCH_LANES:-0}
 
 # NO poll_secs. One was carried here once and NOTHING READ IT -- the poll rate is the cron
 # channel's `schedule` (`*/5 * * * * *`), which is package content, versioned with the channel and

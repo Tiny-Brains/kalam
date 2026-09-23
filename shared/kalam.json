@@ -19,7 +19,14 @@
         "arch": { "var": "metadata.vars.arch" },
         "engine_digest": { "var": "metadata.vars.engine_digest" },
         "orion_version": { "var": "metadata.vars.orion_version" },
-        "node_version": { "var": "metadata.vars.node_version" }
+        "node_version": { "var": "metadata.vars.node_version" },
+        "max_in_flight": {
+          "if": [
+            { ">": [{ "var": "metadata.vars.match_slots" }, 0] },
+            { "var": "metadata.vars.match_slots" },
+            null
+          ]
+        }
       },
       "output": "data.tok"
     },
