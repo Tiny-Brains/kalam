@@ -197,8 +197,8 @@ shutdown_timeout_secs = ${ORION_CRON_SHUTDOWN_SECS:-2700}
 
 # THE MATCH LANES AND ONE MORE, FOR THE ROSTER -- or, on an admitting runner, one: kalam-admit's.
 # RUNNER_CRON_WORKERS is how many matches this machine plays at once, and entrypoint.sh loads exactly
-# that many match lanes (the package ships four, each `forbid` on its own key, so a lane holds at
-# most one worker). This is those lanes plus one, and the plus one is the roster's: Orion has ONE
+# that many match slots (the package ships six on its one `forbid` key, and a slot holds at most one
+# worker). This is those lanes plus one, and the plus one is the roster's: Orion has ONE
 # worker pool per node and a match holds its worker for the whole match, so with workers equal to
 # lanes two long matches skip every roster tick (its misfire policy is `skip`), no new version is
 # registered, and every lane refuses every new trial. A Mac Mini is not a fleet -- start at 2 lanes

@@ -96,8 +96,12 @@ else
     ''|*[!0-9]*) echo "RUNNER_CRON_WORKERS must be a whole number of matches, got '$lanes'" >&2; exit 1 ;;
   esac
   [ "$lanes" -ge 1 ] || { echo "RUNNER_CRON_WORKERS must be at least 1" >&2; exit 1; }
-  # The ceiling is the `slots` the package ships; Orion refuses a value above 64, and lint warns
-  # when two channels naming one key disagree.
+  # The ceiling is the `slots` the package ships: a node never plays more matches at once than the
+  # package was written and measured for. (Orion itself refuses a value above 64.)
+  ceiling=$(sed -n 's/.*"slots": \([0-9][0-9]*\).*/\1/p' "$PKG/channels/kalam-match.json")
+  if [ -n "$ceiling" ] && [ "$lanes" -gt "$ceiling" ]; then
+    echo "RUNNER_CRON_WORKERS=$lanes is above the $ceiling match slots the package ships" >&2; exit 1
+  fi
   KALAM_MATCH_LANES=$lanes
   KALAM_CRON_WORKERS=$((lanes + 1))
   echo "==> $KALAM_MATCH_LANES match slot(s), $KALAM_CRON_WORKERS cron workers (one is the roster's)"

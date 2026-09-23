@@ -81,7 +81,7 @@ Set in `.env`. [`docker-compose.yml`](docker-compose.yml) refuses to start witho
 | `RUNNER_SIG_DIR` | `./keys/signatures` | The deployment's plugin signatures, mounted read-only |
 | `KALAM_IMAGE` | required | The image, and so the engine: a release (`ghcr.io/tiny-brains/kalam:<version>`), or `tinybrains/kalam:dev` built from this checkout |
 | `MODELS_BUCKET` | `tinybrains-models` | The models bucket's name |
-| `RUNNER_CRON_WORKERS` | `2` | Matches at once: the match channel's `concurrency.slots`, at most the four the package ships. Orion's `cron.workers` is this plus one, for the roster |
+| `RUNNER_CRON_WORKERS` | `2` | Matches at once: the match channel's `concurrency.slots`, at most the six the package ships. Orion's `cron.workers` is this plus one, for the roster |
 | `RUNNER_SEAT_CONCURRENCY` | cores ÷ slots | Seats of one match asked at once, 1 to 8. Slots × seats above the cores strikes seats for the machine's load |
 | `RUNNER_MAX_CACHE_BYTES` | 4 GiB | The on-disk model cache (the `runner-models` volume). The admitting runner caps its own at 256 MiB and keeps no volume |
 | `RUNNER_MAX_LOADED_BYTES` | 2 GiB | Model sessions held in memory at once |
@@ -161,7 +161,7 @@ That file never builds, never lets `RUNNER_ALLOW_PRIVATE_URLS` through, runs Ori
 - **Size the Docker VM** above `RUNNER_MAX_CACHE_BYTES + RUNNER_MAX_LOADED_BYTES` plus the runtime:
   about 8 GiB at the defaults, more if you raise `RUNNER_CRON_WORKERS`. Below that the model cache
   thrashes. Every eviction re-fetches an artifact over the WAN, and it shows only as slowness.
-- **Capacity is `RUNNER_CRON_WORKERS`.** That many slots on the one match channel, up to the four the package
+- **Capacity is `RUNNER_CRON_WORKERS`.** That many slots on the one match channel, up to the six the package
   ships, and Orion's pool is one worker larger so the roster clock always has one: with a shared
   pool, long matches skip its ticks, new versions go unregistered, and every lane refuses their
   trials. Start at 2 and watch lease renewals before raising it: each match in flight keeps its
