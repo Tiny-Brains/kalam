@@ -2,15 +2,15 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-`kalam` ships **no server code**. It is an Orion **1.9.0** package, which the orion-server in its
+`kalam` ships **no server code**. It is an Orion **1.9.1** package, which the orion-server in its
 runner image applies to itself at boot (`[packages] apply`). It has three clocks. **`kalam-match`** is
 ONE channel whose `concurrency.slots` is how many matches this node plays at once, each run of
-`kalam-match-run`: claim ONE queued row, then `observe` → one `model_infer` per live seat
-→ `step` until the engine stops returning views, then finish the row in place. **`kalam-roster`**
+`kalam-match-run`: claim ONE queued row, then `observe` → one `model_infer` fanned out over the
+seats asked this turn → `step` until the engine stops returning views, then finish the row in place. **`kalam-roster`**
 registers, admits and activates on this node every version the ladder says is verified or active.
 **`kalam-admit`** is an admitting runner's only clock (`RUNNER_ROLE=admit`): claim one submission Soma
-prepared, register it, let Orion admit it, play it over the reference observations, delete it and
-report. Soma runs no model and judges the report.
+prepared, register it, let Orion admit it, play it over the reference observations (one
+`model_infer` fanned out over them, one at a time), delete it and report. Soma runs no model and judges the report.
 Everything is authored JSON and committed — `workflows/`, `channels/`, `connectors/`, `sql/`,
 `shared/` — with no generator and no build step. `entrypoint.sh` copies the package aside and shapes
 THAT for this node's role and slot count before the server applies it. Kalam owns **execution only**. Soma owns the schema, the
@@ -84,12 +84,28 @@ identically, not just recorded.
 - **`group_runs()` folds consecutive tasks that share a condition into a task group.** A group's
   condition is evaluated once, and a falsy one skips the span *without evaluating the members'*,
   which is what makes stripping the members' conditions equivalent.
-- **A seat is a task, written ONCE.** The task list is fixed, so each per-seat task is an `$each`
-  over `constants.seats` in `shared/kalam.json` — `{{seat}}` interpolates into an id, a name or a
-  `var` path, `{"$param": "seat"}` inserts it typed — each conditioned on the row's `seat_count`, and
-  the claim refuses a wider row. **`constants.seats` must reach the top seat count in the cartridge's
-  `limits.boards`**; web's `scripts/check/configs.sh` reads its length. A repeated condition
-  (`seat-exists`, `seat-plays`) is a value fragment spliced with `$use`.
+- **A call per seat is ONE task with `for_each`; a per-seat decision is an `$each`, written ONCE.**
+  `has` (can this node serve each seat's model) and `infer` (this turn's moves) fan one handler out
+  over an array: `infer` over `temp_data.live`, the seats asked this turn with their model and view,
+  results in `temp_data.infs` in that order. `acts` puts each back on its seat by counting the asked
+  seats before it. Everything else per seat is an `$each` over `constants.seats` in
+  `shared/kalam.json` — `{{seat}}` interpolates into an id, a name or a `var` path,
+  `{"$param": "seat"}` inserts it typed — conditioned on the row's `seat_count`, and the claim refuses
+  a wider row. **`constants.seats` must reach the top seat count in the cartridge's
+  `limits.boards`**; web's `scripts/check/configs.sh` reads its length.
+- **A failed inference is a strike, and `on_null: "unset"` is what makes it one.** `model_infer`
+  writes nothing when it fails, and a mapping that yields `null` is skipped, so a per-seat slot
+  (`p`, `s`, `act`) would keep the last turn's value: a seat that timed out after playing once
+  would replay its last move and never be struck. `infer`'s `into` holds `null` for a failed
+  element, and those three mappings carry `"on_null": "unset"`, so a failure decodes to no action
+  and a seat not asked is charged nothing. `tinybrains` strikes the same way; a replay with a
+  failing seat is identical to the CLI's.
+- **Seats of one match are asked in parallel, bounded by the cores.** `infer`'s `max_concurrency` is
+  a literal (1 as committed) that `load-package.sh` sets from `KALAM_SEAT_CONCURRENCY`, which
+  `entrypoint.sh` derives as cores ÷ slots unless `RUNNER_SEAT_CONCURRENCY` names it. Each call's
+  deadline runs from the moment it asks, **the wait for Orion's inference permit included**, and
+  there is one permit per core — so slots × seats above the cores strikes seats for the node's load.
+  The admission probe stays at 1: it measures one inference alone.
 - **The board rides the claim.** The row carries `map` whole, and `world` passes it to `worldgen`,
   because the component carries no boards. `K_ROW` joins `season_maps` exactly as the gate's claim
   does.
@@ -114,7 +130,8 @@ identically, not just recorded.
   itself (`timeout_ms` on the task is the bound), or calls another package. Its HTTP calls go to its
   own node's admin API, the gate and the buckets.
 - **Never put a runner in cluster mode or shared state.** The `forbid` keys are local because each
-  runner has its own SQLite. Shared state makes each lane a fleet-wide singleton, which looks exactly
+  runner has its own SQLite, which lives on a tmpfs (`/var/lib/orion/state`) and is gone on every
+  start: a crash's `running` occurrences must not hold the match slots after it. Shared state makes each lane a fleet-wide singleton, which looks exactly
   like idle capacity.
 
 ## Gotchas
@@ -155,10 +172,19 @@ Orion:
 - **A cron occurrence's `data` is unreadable**: it returns nowhere, and a trace carries no per-task
   detail (and is dropped above `trace_queue.max_result_size_bytes`). A failing run can be diagnosed
   only by *which* task failed.
-- **Keep `task_details: false` on the match channel and on `kalam-admit`.** With it on, Orion builds a
-  full trace of every write, the per-seat policy tensors included, outside `max_snapshot_bytes`, and
-  `errors_only` drops it only after it has been built and serialized. A runner's memory then grows by
-  gigabytes.
+- **Keep `task_details: false` on every channel here.** Since 1.9.1 it is also what turns
+  `capture_changes` on: with it, every write's old and new value is copied into the run's audit
+  trail and kept until the run ends, and the per-step trace copies each again, outside
+  `max_snapshot_bytes`. `errors_only` drops the trace only after it was built. A match's memory then
+  grows with its turns, by gigabytes.
+- **A `for_each` element runs on a deep copy of the message** (tensors are shared, nothing else), so
+  `max_concurrency` copies are alive at once, and every write in a copy is captured whatever the run
+  says — the fold drops them again when capture is off. `orion-server test` and `dry-run` run with
+  capture on and a per-step trace, so a long match there costs tens of GB that a node never spends:
+  test a match offline in tens of turns, not a thousand.
+- **Orion's static analysis does not read `for_each.into` or `for_each.over`** as a write or a read.
+  `perf.redundant_step_condition` can then propose a group that is wrong, and `clippy --fix` would
+  apply it: check what reads an `into` path before accepting one.
 - **Loop bounds.** `kalam-match-run` loops at most `MATCH_LOOP_MAX` (1010) sweeps: one per turn plus
   the finishing sweep, so it is also the ceiling on `max_turns`, which Soma's `season_rule_spec()`
   caps at 1000 to match. web's `configs.sh` reads the `MATCH_LOOP_MAX = <n>` line, so keep that
@@ -174,9 +200,9 @@ Orion:
   connector's base URL onto `path`, so the URL is trimmed with `substr(url, length(endpoint))`,
   which is exact only because the storage connector sets `force_path_style`. `http_call` parses
   replies as JSON unless given `response_format: "text"`, and an S3 PUT answers with an empty body.
-- **A mapping whose logic is `null` writes nothing.** The slot keeps the previous sweep's value.
-  `mapping()` emits `False` to clear a slot, and `temp_data` survives a sweep, so per-item slots are
-  cleared explicitly.
+- **A mapping whose logic is `null` writes nothing.** The slot keeps the previous sweep's value, and
+  `temp_data` survives a sweep, so a per-item slot is cleared explicitly with
+  `{"path": …, "unset": true}`, which removes it (a read then sees `null`).
 - **`${…}` in `docker/*.toml.tmpl` takes three forms and SKIPS comments.** `${X}`, `${X:-default}`
   and `${X:?message}` — which stops the boot with that sentence and the file, line and column when X
   is unset or empty, so requiredness can live beside the setting instead of only in
@@ -210,10 +236,9 @@ Other:
   non-deterministic out of the other fields.
 - **`engine.ops_budget` must equal Soma's `adapter_ops_max`,** and `orion_version` must equal Soma's.
   web's `configs.sh` checks both, and the admission claim refuses a runner on another Orion.
-- **`ADMIT_LOOP_MAX` must reach Soma's `admit_observations`.** `kalam-admit` plays one observation a
-  sweep and reports on the last; a claim carrying more stops at the loop's end with no report, and
-  every submission expires. web's `configs.sh` reads the `ADMIT_LOOP_MAX = <n>` line, so keep that
-  exact form.
+- **Soma's `admit_observations` × `admit_infer_ms` must fit `kalam-admit`'s `timeout_ms`.** The probe
+  plays every observation the claim carries, one at a time, each up to its deadline; a run cut off
+  by its timeout never reports, and the submission expires. web's `configs.sh` checks it.
 - **`models.max_probe_ms` is pinned in `runner.toml.tmpl`**, because the admitting runner admits
   under it and every match runner's roster re-admits the same versions under it. It equals the
   cartridge's `limits.turn_ms` (web's `configs.sh` checks it), and `tinybrains check` measures the

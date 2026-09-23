@@ -1,5 +1,5 @@
 # Orion config for a RUNNER: a Kalam replica on hardware the deployment does not own. Requires
-# 1.9.0. Baked into this repository's image at /etc/orion/runner.toml.tmpl; the Soma half is soma's
+# 1.9.1. Baked into this repository's image at /etc/orion/runner.toml.tmpl; the Soma half is soma's
 # docker/soma.toml.tmpl. A runner is the only way Kalam runs: it reaches the platform through Soma's
 # gate and holds no database credential.
 #
@@ -29,11 +29,13 @@ port = 8080
 shutdown_drain_secs         = ${ORION_SHUTDOWN_DRAIN_SECS:-5}
 shutdown_force_timeout_secs = ${ORION_SHUTDOWN_FORCE_SECS:-2700}
 
-# Disposable, and on a runner that matters more than in the cluster: the state holds the loaded
-# package and nothing else, and everything that matters is in a Postgres this machine cannot reach.
-# Losing it costs one package load, which entrypoint.sh does again on the next boot.
+# DISPOSABLE, AND GONE ON EVERY START. The state holds the loaded package, this node's model
+# registrations and a few hours of run records, and everything that matters is in a Postgres this
+# machine cannot reach. docker-compose.yml mounts a tmpfs on its directory, so a restart -- a crash
+# included -- boots from nothing: the package is applied again, the roster registers again, and no
+# occurrence a dead process left `running` holds a match slot until its lease runs out.
 [storage]
-url = "sqlite:${ORION_STATE_PATH:-/var/lib/orion/state.db}"
+url = "sqlite:${ORION_STATE_PATH:-/var/lib/orion/state/state.db}"
 auto_migrate = true
 
 [vars]
@@ -98,7 +100,7 @@ models_bucket_connector = "kalam-models"
 # `orion_version` -- a match recorded against one Orion and admitted against another is exactly
 # what a re-validation sweep looks for. It is the same ORION_VERSION this image was built from,
 # which is why it is not typed twice.
-orion_version = "${ORION_VERSION:-1.9.0}"
+orion_version = "${ORION_VERSION:-1.9.1}"
 
 # The node's own admin API, for the roster clock and for entrypoint.sh's package load. It never
 # leaves this machine.
@@ -220,15 +222,22 @@ ops_budget = 1000000
 [metrics]
 enabled = true
 
-# The match channel carries `errors_only: true`, so a clean match of hundreds of turns writes no
-# trace -- the only reason `sync` is affordable on ~3000 task executions per run. On a runner that
-# also means the disk does not fill with the record of matches that went fine.
+# A CRON RUN ALWAYS WRITES A TRACE ROW. Orion upgrades `mode = "off"` to sync for a scheduled run,
+# so this cannot be switched off, only emptied: `errors_only` keeps the result of a failed run and
+# drops every other one. Every channel here sets it too; this is the default for one that does not.
 [trace_storage]
 mode = "sync"
+errors_only = true
 
-# Retention, pinned rather than inherited, and the same 24 hours Soma pins. Orion's default is 72,
-# and the cleanup task reads this one key for both `traces` and `cron_occurrences`. A runner's state
-# database holds nothing that outlives a match: the result went to Soma over the gate and the replay
-# to the bucket, so what is left here is only what was useful while the match was running.
+# ONE HOUR, the shortest the rows are useful for. The cleanup task reads this one key for both
+# `traces` and `cron_occurrences`, and a busy runner writes ~30k occurrences a day (the match clock
+# every 5 s, the admit clock every 10 s, the roster every 20 s), into the tmpfs above. Nothing here
+# outlives a match: the result went to Soma over the gate and the replay to the bucket.
 [trace_queue]
-retention_hours = 24
+retention_hours = 1
+cleanup_interval_secs = 300
+
+# ORION'S ADMIN AUDIT LOG, which records the roster's own registrations on this node and cannot be
+# turned off. Orion keeps it 90 days; a runner has no one to answer to for them.
+[audit]
+retention_days = 1

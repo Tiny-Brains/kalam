@@ -36,6 +36,13 @@ services:
       - ${RUNNER_SIG_DIR:?the deployment's keys/signatures, copied onto this machine}:/sig:ro
       - runner-models:/var/lib/orion/models
 
+    # THE STATE DATABASE LIVES IN MEMORY. It holds the loaded package, this node's registrations and an
+    # hour of run records, all rebuilt at boot, so a tmpfs costs a few MB and means a restart starts
+    # from nothing -- a crash's included, whose `running` occurrences would otherwise hold every match
+    # slot until their 40-minute lease ran out.
+    tmpfs:
+      - /var/lib/orion/state:size=64m,uid=10001,mode=0700
+
     environment:
       RUNNER_KEY: ${RUNNER_KEY:?mint one on the admin Runners page}
       RUNNER_LABEL: ${RUNNER_LABEL:?how this machine appears on the Runners page}
@@ -82,13 +89,14 @@ services:
       ORION_ADMIN_AUTH__ENABLED: "true"
       ORION_ADMIN_AUTH__API_KEYS: ${ORION_ADMIN_KEY}
       ORION_LOGGING__FORMAT: json
-      RUST_LOG: ${ORION_RUST_LOG:-info,dataflow_rs::engine::workflow_executor=warn,dataflow_rs::engine::functions::filter=warn,orion::server::observability=warn}
+      RUST_LOG: ${ORION_RUST_LOG:-info,dataflow_rs::engine::workflow_executor=warn,dataflow_rs::engine::functions::filter=warn,orion::server::observability=warn,orion::cron::worker=warn}
 
-      ORION_VERSION: ${ORION_VERSION:-1.9.0}
+      ORION_VERSION: ${ORION_VERSION:-1.9.1}
       ORION_SHUTDOWN_DRAIN_SECS: ${RUNNER_SHUTDOWN_DRAIN_SECS:-5}
       ORION_SHUTDOWN_FORCE_SECS: ${RUNNER_SHUTDOWN_FORCE_SECS:-2700}
       ORION_CRON_SHUTDOWN_SECS: ${RUNNER_CRON_SHUTDOWN_SECS:-2700}
       RUNNER_CRON_WORKERS: ${RUNNER_CRON_WORKERS:-2}
+      RUNNER_SEAT_CONCURRENCY: ${RUNNER_SEAT_CONCURRENCY:-}
       RUNNER_MAX_CACHE_BYTES: ${RUNNER_MAX_CACHE_BYTES:-4294967296}
       RUNNER_MAX_LOADED_BYTES: ${RUNNER_MAX_LOADED_BYTES:-2147483648}
       # Two glibc arenas, as the Dockerfile sets. Uncapped, every busy thread keeps its own and a
@@ -123,8 +131,11 @@ services:
       RUNNER_LABEL: ${RUNNER_LABEL:?how this machine appears on the Runners page}-admit
       ORION_SHUTDOWN_FORCE_SECS: "630"
       ORION_CRON_SHUTDOWN_SECS: "630"
-    volumes:
-      - admit-models:/var/lib/orion/models
+      RUNNER_MAX_CACHE_BYTES: "268435456"
+    # NO MODEL VOLUME: an admission fetches a model once, probes it and deletes it, so a cache it
+    # never reads again has nothing to keep between restarts. The container's own disk, capped.
+    volumes: !override
+      - ${RUNNER_SIG_DIR:?the deployment's keys/signatures, copied onto this machine}:/sig:ro
     ports: !override
       - "127.0.0.1:${ADMIT_ADMIN_PORT:-8091}:8080"
     stop_grace_period: 660s
@@ -136,4 +147,3 @@ services:
 
 volumes:
   runner-models:
-  admit-models:

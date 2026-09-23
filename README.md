@@ -1,6 +1,6 @@
 # kalam
 
-Kalam is the TinyBrains match runner. It is an Orion 1.9.0 package (cron channels, workflows,
+Kalam is the TinyBrains match runner. It is an Orion 1.9.1 package (cron channels, workflows,
 connectors) shipped inside a runnable image, `ghcr.io/tiny-brains/kalam`: orion-server,
 the package, and the Ants engine from one ants release. A runner claims queued matches through
 [Soma](https://github.com/Tiny-Brains/soma)'s runner gate, plays them turn by turn on Orion's own
@@ -82,14 +82,15 @@ Set in `.env`. [`docker-compose.yml`](docker-compose.yml) refuses to start witho
 | `KALAM_IMAGE` | required | The image, and so the engine: a release (`ghcr.io/tiny-brains/kalam:<version>`), or `tinybrains/kalam:dev` built from this checkout |
 | `MODELS_BUCKET` | `tinybrains-models` | The models bucket's name |
 | `RUNNER_CRON_WORKERS` | `2` | Matches at once: the match channel's `concurrency.slots`, at most the four the package ships. Orion's `cron.workers` is this plus one, for the roster |
-| `RUNNER_MAX_CACHE_BYTES` | 4 GiB | The on-disk model cache (the `runner-models` volume) |
+| `RUNNER_SEAT_CONCURRENCY` | cores ÷ slots | Seats of one match asked at once, 1 to 8. Slots × seats above the cores strikes seats for the machine's load |
+| `RUNNER_MAX_CACHE_BYTES` | 4 GiB | The on-disk model cache (the `runner-models` volume). The admitting runner caps its own at 256 MiB and keeps no volume |
 | `RUNNER_MAX_LOADED_BYTES` | 2 GiB | Model sessions held in memory at once |
 | `MALLOC_ARENA_MAX` | `2` | glibc arenas for orion-server. Uncapped, a busy runner holds gigabytes of memory it has freed |
 | `RUNNER_ALLOW_PRIVATE_URLS` | unset | `1` only against a local stack: lets the connectors reach private addresses |
 | `RUNNER_ADMIN_PORT` | `8090` | Loopback port for this node's `/health` and `/metrics` |
 | `RUNNER_ARCH` | from `uname -m` | Reported on the Runners screen. Leave it unset |
 | `RUNNER_NODE_VERSION` | `dev` | Reported on the Runners screen |
-| `ORION_VERSION` | `1.9.0` | Recorded on every match. Must equal the Soma node's `orion_version` |
+| `ORION_VERSION` | `1.9.1` | Recorded on every match. Must equal the Soma node's `orion_version` |
 | `RUNNER_SHUTDOWN_DRAIN_SECS` | `5` | Orion `server.shutdown_drain_secs` |
 | `RUNNER_SHUTDOWN_FORCE_SECS` | `2700` | Orion `server.shutdown_force_timeout_secs`: the real bound on a draining match |
 | `RUNNER_CRON_SHUTDOWN_SECS` | `2700` | Orion `cron.shutdown_timeout_secs` |
@@ -109,7 +110,7 @@ service and nothing on `runner`, whose role is `match`. The terms a match is pla
 and renew interval, the refusal and strike ceilings, the replay and model prefixes) arrive on each
 claim from the match's season, and are not configured here.
 
-Build args: `ANTS_RELEASE` (empty means the latest ants release) and `ORION_VERSION` (`1.9.0`).
+Build args: `ANTS_RELEASE` (empty means the latest ants release) and `ORION_VERSION` (`1.9.1`).
 
 ## Run a runner
 
@@ -166,6 +167,12 @@ That file never builds, never lets `RUNNER_ALLOW_PRIVATE_URLS` through, runs Ori
   trials. Start at 2 and watch lease renewals before raising it: each match in flight keeps its
   seats' model sessions in memory. The engine is
   wasm and the models are ONNX on CPU, so cores matter more than clock speed.
+- **A match asks its seats in parallel** when cores are left over: `RUNNER_SEAT_CONCURRENCY`
+  defaults to cores ÷ slots. Every inference waits for one of Orion's per-core permits and that wait
+  counts against its turn, so more slots means fewer seats at once, never more than the cores.
+- **The state database is in memory.** Both compose files mount a 64 MiB tmpfs at
+  `/var/lib/orion/state`, so a restart starts clean and a crash leaves nothing holding a match slot.
+  Run records are kept an hour and Orion's audit log a day.
 - **Bandwidth is small and bursty.** One replay PUT per match (about 58 KiB for a 549-turn match),
   one artifact GET per cache miss (at most 64 MiB, `max_artifact_bytes`), and the idle poll: a token
   exchange and a claim per lane every 5 s.
@@ -376,8 +383,9 @@ plugins/tb-ants/               optional local engine for lint (gitignored)
 - A new version's first registration logs an ERROR: the roster's existence check is a GET that
   404s, and so is the barrier's check while a claimed trial waits for it. Orion's `http_call`
   has no accepted-status option, and the model list is paginated, so both stay per-model GETs.
-- Orion's `Message.audit_trail` keeps old and new values for every task execution, and there is no
-  setting to turn it off.
+- Orion's `Message.audit_trail` still records one value-less entry per task per sweep, about 1–2 MB
+  over a 1000-turn match, and there is no setting to turn it off. A cron run always writes a trace
+  row, whatever `tracing.mode` says.
 - Every cron run mints a ten-minute token and uses it once. A longer-lived token would halve an idle
   runner's calls and lift the per-address runner limit.
 - `match_concurrency` in the runner config is read by nothing, and in api mode neither is
@@ -387,9 +395,8 @@ plugins/tb-ants/               optional local engine for lint (gitignored)
   registered and `admit?wait=true` runs another inline, and registration has no way to skip the
   queued one. When the inline one fails fast, `kalam-admit` deletes the model before the queued one
   finishes, which logs `Model admission could not be recorded` at ERROR.
-- `kalam-admit-run` plays one observation a sweep, so a claim carrying more than `ADMIT_LOOP_MAX` (64)
-  would stop at the loop's end without a report. Soma's `admit_observations` is held to it by web's
-  `configs.sh`.
+- Every `infer` element copies the whole message, so a turn copies the match's context once per
+  seat asked. It is freed as the call ends, but it is CPU a match spends on bookkeeping.
 - The `db`-mode branch is still in the package as a rollback. CLAUDE.md has the removal checklist.
 
 ## License

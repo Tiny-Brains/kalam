@@ -125,102 +125,113 @@
       }
     },
     {
-      "id": "opened",
-      "name": "The seats and the refs",
+      "id": "when_opened",
       "condition": { "==": [{ "var": "temp_data.i" }, 0] },
-      "function": {
-        "name": "map",
-        "input": {
-          "mappings": [
-            { "path": "data.seats", "logic": { "var": "data.row.seats" } },
-            {
-              "path": "data.refs",
-              "logic": {
-                "map": [
-                  { "var": "data.seats" },
-                  {
-                    "m": 0,
-                    "seat": { "var": "seat" },
-                    "model": { "var": "model" },
-                    "weights_hash": { "var": "weights_hash" },
-                    "manifest_hash": { "var": "manifest_hash" },
-                    "strike_ceiling": { "var": "strike_ceiling" },
-                    "strikes": 0,
-                    "forfeited": false,
-                    "infer_us_total": 0,
-                    "infer_us_max": 0,
-                    "infer_turns": 0
+      "tasks": [
+        {
+          "id": "opened",
+          "name": "The seats and the refs",
+          "function": {
+            "name": "map",
+            "input": {
+              "mappings": [
+                { "path": "data.seats", "logic": { "var": "data.row.seats" } },
+                {
+                  "path": "data.refs",
+                  "logic": {
+                    "map": [
+                      { "var": "data.seats" },
+                      {
+                        "m": 0,
+                        "seat": { "var": "seat" },
+                        "model": { "var": "model" },
+                        "weights_hash": { "var": "weights_hash" },
+                        "manifest_hash": { "var": "manifest_hash" },
+                        "strike_ceiling": { "var": "strike_ceiling" },
+                        "strikes": 0,
+                        "forfeited": false,
+                        "infer_us_total": 0,
+                        "infer_us_max": 0,
+                        "infer_turns": 0
+                      }
+                    ]
                   }
-                ]
-              }
-            },
-            { "path": "data.deltas", "logic": [] },
-            { "path": "data.struck", "logic": 0 }
-          ]
-        }
-      }
-    },
-    {
-      "$each": { "seat": { "$from": "constants.seats" } },
-      "do": {
-        "id": "has{{seat}}",
-        "name": "Can this node serve seat {{seat}}'s model?",
-        "condition": {
-          "and": [
-            { "==": [{ "var": "temp_data.i" }, 0] },
-            { ">": [{ "var": "data.row.seat_count" }, { "$param": "seat" }] }
-          ]
-        },
-        "continue_on_error": true,
-        "function": {
-          "name": "http_call",
-          "input": {
-            "connector": "kalam-orion",
-            "method": "GET",
-            "path": {
-              "cat": [
-                "/models/",
-                { "val": ["data", "seats", { "$param": "seat" }, "model"] }
+                },
+                { "path": "data.deltas", "logic": [] },
+                { "path": "data.struck", "logic": 0 }
               ]
-            },
-            "output": "temp_data.m{{seat}}"
+            }
+          }
+        },
+        {
+          "id": "has",
+          "name": "Can this node serve every seat's model?",
+          "continue_on_error": true,
+          "function": {
+            "name": "http_call",
+            "input": {
+              "connector": "kalam-orion",
+              "method": "GET",
+              "path": { "cat": ["/models/", { "var": "temp_data.st.model" }] },
+              "output": "temp_data.hm"
+            }
+          },
+          "for_each": {
+            "over": { "var": "data.seats" },
+            "as": "st",
+            "max_concurrency": 8,
+            "collect": "temp_data.hm",
+            "into": "temp_data.ms"
+          }
+        },
+        {
+          "id": "barrier",
+          "name": "How many seats this node cannot play",
+          "function": {
+            "name": "map",
+            "input": {
+              "mappings": [
+                {
+                  "path": "temp_data.n_missing",
+                  "logic": {
+                    "+": [
+                      {
+                        "reduce": [
+                          { "var": "temp_data.ms" },
+                          {
+                            "+": [
+                              { "var": "accumulator" },
+                              {
+                                "if": [
+                                  { "!==": [{ "var": "current.data.status" }, "active"] },
+                                  1,
+                                  0
+                                ]
+                              }
+                            ]
+                          },
+                          0
+                        ]
+                      },
+                      {
+                        "max": [
+                          0,
+                          {
+                            "-": [
+                              { "var": "data.row.seat_count" },
+                              { "length": [{ "var": "temp_data.ms" }] }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
           }
         }
-      }
-    },
-    {
-      "id": "barrier",
-      "name": "How many seats this node cannot play",
-      "condition": { "==": [{ "var": "temp_data.i" }, 0] },
-      "function": {
-        "name": "map",
-        "input": {
-          "mappings": [
-            {
-              "path": "temp_data.n_missing",
-              "logic": {
-                "+": [
-                  {
-                    "$each": { "seat": { "$from": "constants.seats" } },
-                    "do": {
-                      "if": [
-                        {
-                          "and": [
-                            { ">": [{ "var": "data.row.seat_count" }, { "$param": "seat" }] },
-                            { "!==": [{ "var": "temp_data.m{{seat}}.data.status" }, "active"] }
-                          ]
-                        },
-                        1,
-                        0
-                      ]
-                    }
-                  }
-                ]
-              }
-            }
-          ]
-        }
-      }
+      ]
     },
     {
       "id": "when_unready",
@@ -490,6 +501,50 @@
                       { "val": ["temp_data", "obs", "views", 0, "view", "size", 1] }
                     ]
                   }
+                },
+                {
+                  "path": "temp_data.live",
+                  "logic": {
+                    "reduce": [
+                      [
+                        {
+                          "$each": { "seat": { "$from": "constants.seats" } },
+                          "do": {
+                            "seat": { "$param": "seat" },
+                            "model": { "val": ["data", "seats", { "$param": "seat" }, "model"] },
+                            "view": { "var": "temp_data.v{{seat}}" },
+                            "asked": {
+                              "and": [
+                                { ">": [{ "var": "temp_data.n_live" }, 0] },
+                                { ">": [{ "var": "data.row.seat_count" }, { "$param": "seat" }] },
+                                { "!": { "var": "data.f{{seat}}" } },
+                                { "!!": [{ "var": "temp_data.v{{seat}}.mine" }] }
+                              ]
+                            }
+                          }
+                        }
+                      ],
+                      {
+                        "if": [
+                          { "var": "current.asked" },
+                          {
+                            "merge": [
+                              { "var": "accumulator" },
+                              [
+                                {
+                                  "seat": { "var": "current.seat" },
+                                  "model": { "var": "current.model" },
+                                  "view": { "var": "current.view" }
+                                }
+                              ]
+                            ]
+                          },
+                          { "var": "accumulator" }
+                        ]
+                      },
+                      []
+                    ]
+                  }
                 }
               ]
             }
@@ -498,468 +553,583 @@
       ]
     },
     {
-      "$each": { "seat": { "$from": "constants.seats" } },
-      "do": {
-        "id": "infer{{seat}}",
-        "name": "Seat {{seat}}'s move",
-        "condition": {
-          "and": [
-            { ">": [{ "var": "temp_data.n_live" }, 0] },
-            { ">": [{ "var": "data.row.seat_count" }, { "$param": "seat" }] },
-            { "!": { "var": "data.f{{seat}}" } },
-            { "!!": [{ "var": "temp_data.v{{seat}}.mine" }] }
-          ]
+      "id": "when_asked",
+      "condition": { ">": [{ "var": "temp_data.n_live" }, 0] },
+      "tasks": [
+        {
+          "id": "infer",
+          "name": "Every asked seat's move",
+          "continue_on_error": true,
+          "function": {
+            "name": "model_infer",
+            "input": {
+              "model": { "var": "temp_data.sv.model" },
+              "input": { "var": "temp_data.sv.view" },
+              "output": "temp_data.inf.p",
+              "raw": true,
+              "timeout_ms": { "var": "data.ct.turn_ms" },
+              "stats_output": "temp_data.inf.s"
+            }
+          },
+          "for_each": {
+            "over": { "var": "temp_data.live" },
+            "as": "sv",
+            "max_concurrency": 1,
+            "collect": "temp_data.inf",
+            "into": "temp_data.infs"
+          }
         },
-        "continue_on_error": true,
-        "function": {
-          "name": "model_infer",
-          "input": {
-            "model": { "val": ["data", "seats", { "$param": "seat" }, "model"] },
-            "input": { "var": "temp_data.v{{seat}}" },
-            "output": "temp_data.p{{seat}}",
-            "raw": true,
-            "timeout_ms": { "var": "data.ct.turn_ms" },
-            "stats_output": "temp_data.s{{seat}}"
+        {
+          "id": "acts",
+          "name": "Decode each head, accumulate strikes and cost",
+          "function": {
+            "name": "map",
+            "input": {
+              "mappings": [
+                {
+                  "$each": { "seat": { "$from": "constants.seats" } },
+                  "do": {
+                    "path": "temp_data.p{{seat}}",
+                    "logic": {
+                      "if": [
+                        {
+                          "===": [
+                            {
+                              "val": [
+                                "temp_data",
+                                "live",
+                                {
+                                  "reduce": [
+                                    { "var": "temp_data.live" },
+                                    {
+                                      "if": [
+                                        { "<": [{ "var": "current.seat" }, { "$param": "seat" }] },
+                                        { "+": [{ "var": "accumulator" }, 1] },
+                                        { "var": "accumulator" }
+                                      ]
+                                    },
+                                    0
+                                  ]
+                                },
+                                "seat"
+                              ]
+                            },
+                            { "$param": "seat" }
+                          ]
+                        },
+                        {
+                          "val": [
+                            "temp_data",
+                            "infs",
+                            {
+                              "reduce": [
+                                { "var": "temp_data.live" },
+                                {
+                                  "if": [
+                                    { "<": [{ "var": "current.seat" }, { "$param": "seat" }] },
+                                    { "+": [{ "var": "accumulator" }, 1] },
+                                    { "var": "accumulator" }
+                                  ]
+                                },
+                                0
+                              ]
+                            },
+                            "p"
+                          ]
+                        },
+                        null
+                      ]
+                    },
+                    "on_null": "unset"
+                  }
+                },
+                {
+                  "$each": { "seat": { "$from": "constants.seats" } },
+                  "do": {
+                    "path": "temp_data.s{{seat}}",
+                    "logic": {
+                      "if": [
+                        {
+                          "===": [
+                            {
+                              "val": [
+                                "temp_data",
+                                "live",
+                                {
+                                  "reduce": [
+                                    { "var": "temp_data.live" },
+                                    {
+                                      "if": [
+                                        { "<": [{ "var": "current.seat" }, { "$param": "seat" }] },
+                                        { "+": [{ "var": "accumulator" }, 1] },
+                                        { "var": "accumulator" }
+                                      ]
+                                    },
+                                    0
+                                  ]
+                                },
+                                "seat"
+                              ]
+                            },
+                            { "$param": "seat" }
+                          ]
+                        },
+                        {
+                          "val": [
+                            "temp_data",
+                            "infs",
+                            {
+                              "reduce": [
+                                { "var": "temp_data.live" },
+                                {
+                                  "if": [
+                                    { "<": [{ "var": "current.seat" }, { "$param": "seat" }] },
+                                    { "+": [{ "var": "accumulator" }, 1] },
+                                    { "var": "accumulator" }
+                                  ]
+                                },
+                                0
+                              ]
+                            },
+                            "s"
+                          ]
+                        },
+                        null
+                      ]
+                    },
+                    "on_null": "unset"
+                  }
+                },
+                {
+                  "path": "temp_data.a0",
+                  "logic": {
+                    "if": [
+                      {
+                        "!": {
+                          "and": [
+                            { ">": [{ "var": "temp_data.n_live" }, 0] },
+                            { ">": [{ "var": "data.row.seat_count" }, 0] },
+                            { "!": { "var": "data.f0" } },
+                            { "!!": [{ "var": "temp_data.v0.mine" }] }
+                          ]
+                        }
+                      },
+                      null,
+                      {
+                        "map": [
+                          {
+                            "reduce": [
+                              {
+                                "if": [
+                                  { "var": "temp_data.v0.mine" },
+                                  { "var": "temp_data.v0.mine" },
+                                  []
+                                ]
+                              },
+                              {
+                                "merge": [
+                                  { "var": "accumulator" },
+                                  [
+                                    {
+                                      "+": [
+                                        {
+                                          "*": [
+                                            { "val": [[1], "temp_data", "w"] },
+                                            { "var": "current.0" }
+                                          ]
+                                        },
+                                        { "var": "current.1" }
+                                      ]
+                                    }
+                                  ]
+                                ]
+                              },
+                              []
+                            ]
+                          },
+                          { "var": "" }
+                        ]
+                      }
+                    ]
+                  }
+                },
+                {
+                  "path": "temp_data.a1",
+                  "logic": {
+                    "if": [
+                      {
+                        "!": {
+                          "and": [
+                            { ">": [{ "var": "temp_data.n_live" }, 0] },
+                            { ">": [{ "var": "data.row.seat_count" }, 1] },
+                            { "!": { "var": "data.f1" } },
+                            { "!!": [{ "var": "temp_data.v1.mine" }] }
+                          ]
+                        }
+                      },
+                      null,
+                      {
+                        "map": [
+                          {
+                            "reduce": [
+                              {
+                                "if": [
+                                  { "var": "temp_data.v1.mine" },
+                                  { "var": "temp_data.v1.mine" },
+                                  []
+                                ]
+                              },
+                              {
+                                "merge": [
+                                  { "var": "accumulator" },
+                                  [
+                                    {
+                                      "+": [
+                                        {
+                                          "*": [
+                                            { "val": [[1], "temp_data", "w"] },
+                                            { "var": "current.0" }
+                                          ]
+                                        },
+                                        { "var": "current.1" }
+                                      ]
+                                    }
+                                  ]
+                                ]
+                              },
+                              []
+                            ]
+                          },
+                          { "var": "" }
+                        ]
+                      }
+                    ]
+                  }
+                },
+                {
+                  "path": "temp_data.a2",
+                  "logic": {
+                    "if": [
+                      {
+                        "!": {
+                          "and": [
+                            { ">": [{ "var": "temp_data.n_live" }, 0] },
+                            { ">": [{ "var": "data.row.seat_count" }, 2] },
+                            { "!": { "var": "data.f2" } },
+                            { "!!": [{ "var": "temp_data.v2.mine" }] }
+                          ]
+                        }
+                      },
+                      null,
+                      {
+                        "map": [
+                          {
+                            "reduce": [
+                              {
+                                "if": [
+                                  { "var": "temp_data.v2.mine" },
+                                  { "var": "temp_data.v2.mine" },
+                                  []
+                                ]
+                              },
+                              {
+                                "merge": [
+                                  { "var": "accumulator" },
+                                  [
+                                    {
+                                      "+": [
+                                        {
+                                          "*": [
+                                            { "val": [[1], "temp_data", "w"] },
+                                            { "var": "current.0" }
+                                          ]
+                                        },
+                                        { "var": "current.1" }
+                                      ]
+                                    }
+                                  ]
+                                ]
+                              },
+                              []
+                            ]
+                          },
+                          { "var": "" }
+                        ]
+                      }
+                    ]
+                  }
+                },
+                {
+                  "path": "temp_data.a3",
+                  "logic": {
+                    "if": [
+                      {
+                        "!": {
+                          "and": [
+                            { ">": [{ "var": "temp_data.n_live" }, 0] },
+                            { ">": [{ "var": "data.row.seat_count" }, 3] },
+                            { "!": { "var": "data.f3" } },
+                            { "!!": [{ "var": "temp_data.v3.mine" }] }
+                          ]
+                        }
+                      },
+                      null,
+                      {
+                        "map": [
+                          {
+                            "reduce": [
+                              {
+                                "if": [
+                                  { "var": "temp_data.v3.mine" },
+                                  { "var": "temp_data.v3.mine" },
+                                  []
+                                ]
+                              },
+                              {
+                                "merge": [
+                                  { "var": "accumulator" },
+                                  [
+                                    {
+                                      "+": [
+                                        {
+                                          "*": [
+                                            { "val": [[1], "temp_data", "w"] },
+                                            { "var": "current.0" }
+                                          ]
+                                        },
+                                        { "var": "current.1" }
+                                      ]
+                                    }
+                                  ]
+                                ]
+                              },
+                              []
+                            ]
+                          },
+                          { "var": "" }
+                        ]
+                      }
+                    ]
+                  }
+                },
+                {
+                  "path": "temp_data.a4",
+                  "logic": {
+                    "if": [
+                      {
+                        "!": {
+                          "and": [
+                            { ">": [{ "var": "temp_data.n_live" }, 0] },
+                            { ">": [{ "var": "data.row.seat_count" }, 4] },
+                            { "!": { "var": "data.f4" } },
+                            { "!!": [{ "var": "temp_data.v4.mine" }] }
+                          ]
+                        }
+                      },
+                      null,
+                      {
+                        "map": [
+                          {
+                            "reduce": [
+                              {
+                                "if": [
+                                  { "var": "temp_data.v4.mine" },
+                                  { "var": "temp_data.v4.mine" },
+                                  []
+                                ]
+                              },
+                              {
+                                "merge": [
+                                  { "var": "accumulator" },
+                                  [
+                                    {
+                                      "+": [
+                                        {
+                                          "*": [
+                                            { "val": [[1], "temp_data", "w"] },
+                                            { "var": "current.0" }
+                                          ]
+                                        },
+                                        { "var": "current.1" }
+                                      ]
+                                    }
+                                  ]
+                                ]
+                              },
+                              []
+                            ]
+                          },
+                          { "var": "" }
+                        ]
+                      }
+                    ]
+                  }
+                },
+                {
+                  "path": "temp_data.a5",
+                  "logic": {
+                    "if": [
+                      {
+                        "!": {
+                          "and": [
+                            { ">": [{ "var": "temp_data.n_live" }, 0] },
+                            { ">": [{ "var": "data.row.seat_count" }, 5] },
+                            { "!": { "var": "data.f5" } },
+                            { "!!": [{ "var": "temp_data.v5.mine" }] }
+                          ]
+                        }
+                      },
+                      null,
+                      {
+                        "map": [
+                          {
+                            "reduce": [
+                              {
+                                "if": [
+                                  { "var": "temp_data.v5.mine" },
+                                  { "var": "temp_data.v5.mine" },
+                                  []
+                                ]
+                              },
+                              {
+                                "merge": [
+                                  { "var": "accumulator" },
+                                  [
+                                    {
+                                      "+": [
+                                        {
+                                          "*": [
+                                            { "val": [[1], "temp_data", "w"] },
+                                            { "var": "current.0" }
+                                          ]
+                                        },
+                                        { "var": "current.1" }
+                                      ]
+                                    }
+                                  ]
+                                ]
+                              },
+                              []
+                            ]
+                          },
+                          { "var": "" }
+                        ]
+                      }
+                    ]
+                  }
+                },
+                {
+                  "path": "temp_data.a6",
+                  "logic": {
+                    "if": [
+                      {
+                        "!": {
+                          "and": [
+                            { ">": [{ "var": "temp_data.n_live" }, 0] },
+                            { ">": [{ "var": "data.row.seat_count" }, 6] },
+                            { "!": { "var": "data.f6" } },
+                            { "!!": [{ "var": "temp_data.v6.mine" }] }
+                          ]
+                        }
+                      },
+                      null,
+                      {
+                        "map": [
+                          {
+                            "reduce": [
+                              {
+                                "if": [
+                                  { "var": "temp_data.v6.mine" },
+                                  { "var": "temp_data.v6.mine" },
+                                  []
+                                ]
+                              },
+                              {
+                                "merge": [
+                                  { "var": "accumulator" },
+                                  [
+                                    {
+                                      "+": [
+                                        {
+                                          "*": [
+                                            { "val": [[1], "temp_data", "w"] },
+                                            { "var": "current.0" }
+                                          ]
+                                        },
+                                        { "var": "current.1" }
+                                      ]
+                                    }
+                                  ]
+                                ]
+                              },
+                              []
+                            ]
+                          },
+                          { "var": "" }
+                        ]
+                      }
+                    ]
+                  }
+                },
+                {
+                  "path": "temp_data.a7",
+                  "logic": {
+                    "if": [
+                      {
+                        "!": {
+                          "and": [
+                            { ">": [{ "var": "temp_data.n_live" }, 0] },
+                            { ">": [{ "var": "data.row.seat_count" }, 7] },
+                            { "!": { "var": "data.f7" } },
+                            { "!!": [{ "var": "temp_data.v7.mine" }] }
+                          ]
+                        }
+                      },
+                      null,
+                      {
+                        "map": [
+                          {
+                            "reduce": [
+                              {
+                                "if": [
+                                  { "var": "temp_data.v7.mine" },
+                                  { "var": "temp_data.v7.mine" },
+                                  []
+                                ]
+                              },
+                              {
+                                "merge": [
+                                  { "var": "accumulator" },
+                                  [
+                                    {
+                                      "+": [
+                                        {
+                                          "*": [
+                                            { "val": [[1], "temp_data", "w"] },
+                                            { "var": "current.0" }
+                                          ]
+                                        },
+                                        { "var": "current.1" }
+                                      ]
+                                    }
+                                  ]
+                                ]
+                              },
+                              []
+                            ]
+                          },
+                          { "var": "" }
+                        ]
+                      }
+                    ]
+                  }
+                },
+                { "path": "temp_data.idx", "unset": true }
+              ]
+            }
           }
         }
-      }
-    },
-    {
-      "id": "acts",
-      "name": "Decode each head, accumulate strikes and cost",
-      "condition": { ">": [{ "var": "temp_data.n_live" }, 0] },
-      "function": {
-        "name": "map",
-        "input": {
-          "mappings": [
-            {
-              "path": "temp_data.a0",
-              "logic": {
-                "if": [
-                  {
-                    "!": {
-                      "and": [
-                        { ">": [{ "var": "temp_data.n_live" }, 0] },
-                        { ">": [{ "var": "data.row.seat_count" }, 0] },
-                        { "!": { "var": "data.f0" } },
-                        { "!!": [{ "var": "temp_data.v0.mine" }] }
-                      ]
-                    }
-                  },
-                  null,
-                  {
-                    "map": [
-                      {
-                        "reduce": [
-                          {
-                            "if": [
-                              { "var": "temp_data.v0.mine" },
-                              { "var": "temp_data.v0.mine" },
-                              []
-                            ]
-                          },
-                          {
-                            "merge": [
-                              { "var": "accumulator" },
-                              [
-                                {
-                                  "+": [
-                                    {
-                                      "*": [
-                                        { "val": [[1], "temp_data", "w"] },
-                                        { "var": "current.0" }
-                                      ]
-                                    },
-                                    { "var": "current.1" }
-                                  ]
-                                }
-                              ]
-                            ]
-                          },
-                          []
-                        ]
-                      },
-                      { "var": "" }
-                    ]
-                  }
-                ]
-              }
-            },
-            {
-              "path": "temp_data.a1",
-              "logic": {
-                "if": [
-                  {
-                    "!": {
-                      "and": [
-                        { ">": [{ "var": "temp_data.n_live" }, 0] },
-                        { ">": [{ "var": "data.row.seat_count" }, 1] },
-                        { "!": { "var": "data.f1" } },
-                        { "!!": [{ "var": "temp_data.v1.mine" }] }
-                      ]
-                    }
-                  },
-                  null,
-                  {
-                    "map": [
-                      {
-                        "reduce": [
-                          {
-                            "if": [
-                              { "var": "temp_data.v1.mine" },
-                              { "var": "temp_data.v1.mine" },
-                              []
-                            ]
-                          },
-                          {
-                            "merge": [
-                              { "var": "accumulator" },
-                              [
-                                {
-                                  "+": [
-                                    {
-                                      "*": [
-                                        { "val": [[1], "temp_data", "w"] },
-                                        { "var": "current.0" }
-                                      ]
-                                    },
-                                    { "var": "current.1" }
-                                  ]
-                                }
-                              ]
-                            ]
-                          },
-                          []
-                        ]
-                      },
-                      { "var": "" }
-                    ]
-                  }
-                ]
-              }
-            },
-            {
-              "path": "temp_data.a2",
-              "logic": {
-                "if": [
-                  {
-                    "!": {
-                      "and": [
-                        { ">": [{ "var": "temp_data.n_live" }, 0] },
-                        { ">": [{ "var": "data.row.seat_count" }, 2] },
-                        { "!": { "var": "data.f2" } },
-                        { "!!": [{ "var": "temp_data.v2.mine" }] }
-                      ]
-                    }
-                  },
-                  null,
-                  {
-                    "map": [
-                      {
-                        "reduce": [
-                          {
-                            "if": [
-                              { "var": "temp_data.v2.mine" },
-                              { "var": "temp_data.v2.mine" },
-                              []
-                            ]
-                          },
-                          {
-                            "merge": [
-                              { "var": "accumulator" },
-                              [
-                                {
-                                  "+": [
-                                    {
-                                      "*": [
-                                        { "val": [[1], "temp_data", "w"] },
-                                        { "var": "current.0" }
-                                      ]
-                                    },
-                                    { "var": "current.1" }
-                                  ]
-                                }
-                              ]
-                            ]
-                          },
-                          []
-                        ]
-                      },
-                      { "var": "" }
-                    ]
-                  }
-                ]
-              }
-            },
-            {
-              "path": "temp_data.a3",
-              "logic": {
-                "if": [
-                  {
-                    "!": {
-                      "and": [
-                        { ">": [{ "var": "temp_data.n_live" }, 0] },
-                        { ">": [{ "var": "data.row.seat_count" }, 3] },
-                        { "!": { "var": "data.f3" } },
-                        { "!!": [{ "var": "temp_data.v3.mine" }] }
-                      ]
-                    }
-                  },
-                  null,
-                  {
-                    "map": [
-                      {
-                        "reduce": [
-                          {
-                            "if": [
-                              { "var": "temp_data.v3.mine" },
-                              { "var": "temp_data.v3.mine" },
-                              []
-                            ]
-                          },
-                          {
-                            "merge": [
-                              { "var": "accumulator" },
-                              [
-                                {
-                                  "+": [
-                                    {
-                                      "*": [
-                                        { "val": [[1], "temp_data", "w"] },
-                                        { "var": "current.0" }
-                                      ]
-                                    },
-                                    { "var": "current.1" }
-                                  ]
-                                }
-                              ]
-                            ]
-                          },
-                          []
-                        ]
-                      },
-                      { "var": "" }
-                    ]
-                  }
-                ]
-              }
-            },
-            {
-              "path": "temp_data.a4",
-              "logic": {
-                "if": [
-                  {
-                    "!": {
-                      "and": [
-                        { ">": [{ "var": "temp_data.n_live" }, 0] },
-                        { ">": [{ "var": "data.row.seat_count" }, 4] },
-                        { "!": { "var": "data.f4" } },
-                        { "!!": [{ "var": "temp_data.v4.mine" }] }
-                      ]
-                    }
-                  },
-                  null,
-                  {
-                    "map": [
-                      {
-                        "reduce": [
-                          {
-                            "if": [
-                              { "var": "temp_data.v4.mine" },
-                              { "var": "temp_data.v4.mine" },
-                              []
-                            ]
-                          },
-                          {
-                            "merge": [
-                              { "var": "accumulator" },
-                              [
-                                {
-                                  "+": [
-                                    {
-                                      "*": [
-                                        { "val": [[1], "temp_data", "w"] },
-                                        { "var": "current.0" }
-                                      ]
-                                    },
-                                    { "var": "current.1" }
-                                  ]
-                                }
-                              ]
-                            ]
-                          },
-                          []
-                        ]
-                      },
-                      { "var": "" }
-                    ]
-                  }
-                ]
-              }
-            },
-            {
-              "path": "temp_data.a5",
-              "logic": {
-                "if": [
-                  {
-                    "!": {
-                      "and": [
-                        { ">": [{ "var": "temp_data.n_live" }, 0] },
-                        { ">": [{ "var": "data.row.seat_count" }, 5] },
-                        { "!": { "var": "data.f5" } },
-                        { "!!": [{ "var": "temp_data.v5.mine" }] }
-                      ]
-                    }
-                  },
-                  null,
-                  {
-                    "map": [
-                      {
-                        "reduce": [
-                          {
-                            "if": [
-                              { "var": "temp_data.v5.mine" },
-                              { "var": "temp_data.v5.mine" },
-                              []
-                            ]
-                          },
-                          {
-                            "merge": [
-                              { "var": "accumulator" },
-                              [
-                                {
-                                  "+": [
-                                    {
-                                      "*": [
-                                        { "val": [[1], "temp_data", "w"] },
-                                        { "var": "current.0" }
-                                      ]
-                                    },
-                                    { "var": "current.1" }
-                                  ]
-                                }
-                              ]
-                            ]
-                          },
-                          []
-                        ]
-                      },
-                      { "var": "" }
-                    ]
-                  }
-                ]
-              }
-            },
-            {
-              "path": "temp_data.a6",
-              "logic": {
-                "if": [
-                  {
-                    "!": {
-                      "and": [
-                        { ">": [{ "var": "temp_data.n_live" }, 0] },
-                        { ">": [{ "var": "data.row.seat_count" }, 6] },
-                        { "!": { "var": "data.f6" } },
-                        { "!!": [{ "var": "temp_data.v6.mine" }] }
-                      ]
-                    }
-                  },
-                  null,
-                  {
-                    "map": [
-                      {
-                        "reduce": [
-                          {
-                            "if": [
-                              { "var": "temp_data.v6.mine" },
-                              { "var": "temp_data.v6.mine" },
-                              []
-                            ]
-                          },
-                          {
-                            "merge": [
-                              { "var": "accumulator" },
-                              [
-                                {
-                                  "+": [
-                                    {
-                                      "*": [
-                                        { "val": [[1], "temp_data", "w"] },
-                                        { "var": "current.0" }
-                                      ]
-                                    },
-                                    { "var": "current.1" }
-                                  ]
-                                }
-                              ]
-                            ]
-                          },
-                          []
-                        ]
-                      },
-                      { "var": "" }
-                    ]
-                  }
-                ]
-              }
-            },
-            {
-              "path": "temp_data.a7",
-              "logic": {
-                "if": [
-                  {
-                    "!": {
-                      "and": [
-                        { ">": [{ "var": "temp_data.n_live" }, 0] },
-                        { ">": [{ "var": "data.row.seat_count" }, 7] },
-                        { "!": { "var": "data.f7" } },
-                        { "!!": [{ "var": "temp_data.v7.mine" }] }
-                      ]
-                    }
-                  },
-                  null,
-                  {
-                    "map": [
-                      {
-                        "reduce": [
-                          {
-                            "if": [
-                              { "var": "temp_data.v7.mine" },
-                              { "var": "temp_data.v7.mine" },
-                              []
-                            ]
-                          },
-                          {
-                            "merge": [
-                              { "var": "accumulator" },
-                              [
-                                {
-                                  "+": [
-                                    {
-                                      "*": [
-                                        { "val": [[1], "temp_data", "w"] },
-                                        { "var": "current.0" }
-                                      ]
-                                    },
-                                    { "var": "current.1" }
-                                  ]
-                                }
-                              ]
-                            ]
-                          },
-                          []
-                        ]
-                      },
-                      { "var": "" }
-                    ]
-                  }
-                ]
-              }
-            },
-            { "path": "temp_data.idx", "logic": false }
-          ]
-        }
-      }
+      ]
     },
     {
       "$each": { "seat": { "$from": "constants.seats" } },
@@ -1024,7 +1194,8 @@
                       ]
                     }
                   ]
-                }
+                },
+                "on_null": "unset"
               }
             ]
           }

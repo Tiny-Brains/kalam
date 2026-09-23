@@ -19,9 +19,9 @@ PKG="${KALAM_PKG_DIR:-/pkg/kalam}"
 : "${ORION_ADMIN_KEY:?ORION_ADMIN_KEY is required -- the admin key of this node itself; the package is applied over it}"
 
 # ---------------------------------------------------------------- the state database
-# A SQLite file holding the loaded package and nothing else, so a container-local path with no
-# volume behind it is correct: it is rebuilt on every boot.
-state_dir=$(dirname "${ORION_STATE_PATH:-/var/lib/orion/state.db}")
+# A SQLite file holding the loaded package and a few hours of run records, so it belongs on the
+# tmpfs docker-compose.yml mounts here: it is rebuilt on every boot, a crash's included.
+state_dir=$(dirname "${ORION_STATE_PATH:-/var/lib/orion/state/state.db}")
 mkdir -p "$state_dir" 2>/dev/null || true
 [ -w "$state_dir" ] || { echo "state directory $state_dir is not writable by $(id -un)" >&2; exit 1; }
 
@@ -88,6 +88,7 @@ esac
 if [ "$KALAM_ROLE" = admit ]; then
   KALAM_MATCH_LANES=0
   KALAM_CRON_WORKERS=1
+  KALAM_SEAT_CONCURRENCY=
   echo "==> an admitting runner: the kalam-admit channel, 1 cron worker, no match lanes"
 else
   lanes="${RUNNER_CRON_WORKERS:-2}"
@@ -100,8 +101,33 @@ else
   KALAM_MATCH_LANES=$lanes
   KALAM_CRON_WORKERS=$((lanes + 1))
   echo "==> $KALAM_MATCH_LANES match slot(s), $KALAM_CRON_WORKERS cron workers (one is the roster's)"
+
+  # SEATS ONE MATCH ASKS AT ONCE, and never more than the cores leave room for. A turn's inferences
+  # run in parallel up to this many, and every one is timed against the turn's deadline from the
+  # moment it asks -- WAITING FOR ORION'S INFERENCE PERMIT INCLUDED, and the permits are one per core
+  # (`models.max_concurrent_inferences` defaults to the cores this container may use). So slots x
+  # seats must stay within the cores, or a seat is struck for the node's load, not its model.
+  # Derived from the cgroup's CPU quota when one is set (docker's `cpus`), else the cores present.
+  cpus=$(nproc)
+  if [ -r /sys/fs/cgroup/cpu.max ]; then
+    read -r quota period < /sys/fs/cgroup/cpu.max || true
+    if [ "${quota:-max}" != max ] && [ "${period:-0}" -gt 0 ]; then
+      cpus=$((quota / period)); [ "$cpus" -ge 1 ] || cpus=1
+    fi
+  fi
+  seats="${RUNNER_SEAT_CONCURRENCY:-$((cpus / lanes))}"
+  case "$seats" in
+    ''|*[!0-9]*) echo "RUNNER_SEAT_CONCURRENCY must be a whole number of seats, got '$seats'" >&2; exit 1 ;;
+  esac
+  [ "$seats" -ge 1 ] || seats=1
+  [ "$seats" -le 8 ] || seats=8
+  if [ $((seats * lanes)) -gt "$cpus" ]; then
+    echo "==> WARNING: $lanes slot(s) x $seats seat(s) at once exceeds $cpus core(s); seats will be struck for this node's load" >&2
+  fi
+  KALAM_SEAT_CONCURRENCY=$seats
+  echo "==> $KALAM_SEAT_CONCURRENCY seat(s) of a match asked at once ($cpus core(s))"
 fi
-export KALAM_ROLE KALAM_MATCH_LANES KALAM_CRON_WORKERS
+export KALAM_ROLE KALAM_MATCH_LANES KALAM_CRON_WORKERS KALAM_SEAT_CONCURRENCY
 
 echo "==> migrating state"
 orion-server -c "$CFG" migrate --wait 30s > /dev/null
@@ -119,6 +145,7 @@ ARTIFACT="${KALAM_ARTIFACT:-/var/lib/orion/kalam.package.json}"
 export KALAM_ARTIFACT="$ARTIFACT"
 
 KALAM_ROLE="$KALAM_ROLE" KALAM_MATCH_LANES="$KALAM_MATCH_LANES" \
+  KALAM_SEAT_CONCURRENCY="${KALAM_SEAT_CONCURRENCY:-}" \
   sh "$PKG/scripts/load-package.sh" --compile-only -o "$ARTIFACT" > /dev/null
 
 echo "==> starting orion-server with $CFG"

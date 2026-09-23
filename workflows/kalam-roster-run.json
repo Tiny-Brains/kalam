@@ -55,9 +55,9 @@
               "path": "temp_data.it",
               "logic": { "val": ["data", "rb", "items", { "val": ["temp_data", "i"] }] }
             },
-            { "path": "temp_data.have", "logic": false },
-            { "path": "temp_data.made", "logic": false },
-            { "path": "temp_data.activated", "logic": false }
+            { "path": "temp_data.have", "unset": true },
+            { "path": "temp_data.made", "unset": true },
+            { "path": "temp_data.activated", "unset": true }
           ]
         }
       }

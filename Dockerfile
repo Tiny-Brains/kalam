@@ -31,7 +31,7 @@
 # one signature verifies on both. Only the runtime stage is per platform.
 
 ARG ANTS_RELEASE=
-ARG ORION_VERSION=1.9.0
+ARG ORION_VERSION=1.9.1
 ARG CURL_VERSION=8.22.0
 ARG DEBIAN_VERSION=bookworm-slim
 
@@ -103,8 +103,9 @@ RUN apt-get update \
  # `models` EXISTS IN THE IMAGE so that a named volume mounted there inherits its ownership. Docker
  # copies the image's directory ownership into a fresh volume when the path is present and creates
  # it ROOT-OWNED when it is not -- and the server runs as uid 10001, so an absent directory here is a
- # model cache the runner cannot write. docker-compose.yml mounts exactly this path.
- && install -d -o orion -g orion /var/lib/orion /var/lib/orion/models
+ # model cache the runner cannot write. docker-compose.yml mounts exactly this path. `state` is
+ # where a tmpfs goes, and exists so that a runner started without one still boots.
+ && install -d -o orion -g orion /var/lib/orion /var/lib/orion/models /var/lib/orion/state
 
 COPY --from=orion /usr/local/bin/orion-server /usr/local/bin/orion-server
 COPY docker/entrypoint.sh    /usr/local/bin/kalam

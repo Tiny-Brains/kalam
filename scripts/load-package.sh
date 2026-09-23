@@ -38,6 +38,8 @@
 #   PLUGIN_SIG_DIR          detached Ed25519 signatures, named <component>.sig or <plugin id>.sig
 #   KALAM_ROLE              match (default) or admit
 #   KALAM_MATCH_LANES       matches at once, as the match channel's slots (unset keeps the shipped max)
+#   KALAM_SEAT_CONCURRENCY  seats one match asks at once, as `infer`'s for_each max_concurrency
+#                           (unset keeps the shipped 1: one seat at a time)
 #
 # Everything a deployment varies is read by the definitions and the instance config: the platform's
 # URL, this node's admin API, the replay endpoint and `allow_private_urls` as references on the
@@ -92,6 +94,15 @@ else
     sed "s/\"slots\": [0-9][0-9]*/\"slots\": $KALAM_MATCH_LANES/" "$ch" > "$ch.tmp" && mv "$ch.tmp" "$ch"
     grep -q "\"slots\": $KALAM_MATCH_LANES" "$ch" || {
       echo "could not set the match channel to $KALAM_MATCH_LANES slot(s)" >&2; exit 1; }
+  fi
+  if [ -n "${KALAM_SEAT_CONCURRENCY:-}" ]; then
+    # `max_concurrency` is a literal too. It is the line after `"as": "sv"`, the fan-out of one
+    # turn's inferences; the other fan-out in the file (`has`, the start-of-match lookups) is left.
+    wf="$SET/workflows/kalam-match-run.json"
+    sed "/\"as\": \"sv\",/{n;s/\"max_concurrency\": [0-9][0-9]*/\"max_concurrency\": $KALAM_SEAT_CONCURRENCY/;}" \
+      "$wf" > "$wf.tmp" && mv "$wf.tmp" "$wf"
+    grep -A1 '"as": "sv",' "$wf" | grep -q "\"max_concurrency\": $KALAM_SEAT_CONCURRENCY" || {
+      echo "could not set a match's seats at once to $KALAM_SEAT_CONCURRENCY" >&2; exit 1; }
   fi
 fi
 

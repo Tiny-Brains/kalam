@@ -1,108 +1,87 @@
 {
   "workflow_id": "kalam-admit-run",
   "name": "Kalam: admit one submission",
-  "description": "An ADMITTING runner's clock (RUNNER_ROLE=admit). Claims one submission Soma's admit clock prepared, registers it on this node from the registration Soma rebuilt, lets Orion admit it, activates it, plays it over the reference observations the claim carried -- one a sweep -- deletes it, and reports Orion's record, its stats and the probe's tally to the gate. Soma judges the report; nothing here decides whose fault anything is. A run that dies reports nothing, and the lease lapsing hands the row to the next claim.",
+  "description": "An ADMITTING runner's clock (RUNNER_ROLE=admit). Claims one submission Soma's admit clock prepared, registers it on this node from the registration Soma rebuilt, lets Orion admit it, activates it, plays it over every reference observation the claim carried -- one `model_infer` fanned out over them, one at a time, so each is timed alone -- deletes it, and reports Orion's record, its stats and the probe's tally to the gate. Soma judges the report; nothing here decides whose fault anything is. A run that dies reports nothing, and the lease lapsing hands the row to the next claim.",
   "tags": ["kalam", "clock", "admission"],
   "condition": true,
-  "loop": { "counter": "i", "max": 64 },
   "tasks": [
     {
-      "id": "when_aauth",
-      "condition": { "==": [{ "var": "temp_data.i" }, 0] },
-      "tasks": [
-        {
-          "id": "aauth",
-          "name": "Exchange the runner key for a token",
-          "continue_on_error": true,
-          "function": { "name": "http_call", "input": { "$from": "constants.runner_token_call" } }
-        },
-        {
-          "id": "aclaim",
-          "name": "Claim one submission to admit",
-          "continue_on_error": true,
-          "function": {
-            "name": "http_call",
-            "input": {
-              "connector": "kalam-api",
-              "method": "POST",
-              "path": "/v1/runner/admissions/claim",
-              "headers": { "Authorization": { "cat": ["Bearer ", { "var": "data.tok.token" }] } },
-              "body": { "orion_version": { "var": "metadata.vars.orion_version" } },
-              "output": "data.job"
-            }
-          }
-        },
-        {
-          "id": "idle",
-          "name": "Stop when there is nothing to admit",
-          "function": {
-            "name": "filter",
-            "input": {
-              "condition": { "!!": { "var": "data.job.claim.token" } },
-              "on_reject": "halt"
-            }
-          }
-        },
-        {
-          "id": "open",
-          "name": "Open the walk",
-          "function": {
-            "name": "map",
-            "input": {
-              "mappings": [
-                { "path": "data.model", "logic": { "var": "data.job.admission.model" } },
-                { "path": "data.version_id", "logic": { "var": "data.job.admission.version_id" } },
-                {
-                  "path": "data.n",
-                  "logic": {
-                    "min": [{ "length": [{ "var": "data.job.admission.observations" }] }, 64]
-                  }
-                },
-                { "path": "data.probing", "logic": false },
-                { "path": "data.ok", "logic": true },
-                { "path": "data.over_budget", "logic": false },
-                { "path": "data.reason", "logic": false },
-                { "path": "data.ops_max", "logic": 0 },
-                { "path": "data.infer_us_max", "logic": 0 },
-                { "path": "data.checked", "logic": 0 },
-                { "path": "data.errored", "logic": false }
-              ]
-            }
-          }
-        },
-        {
-          "id": "register",
-          "name": "Register it here, by reference and digest",
-          "continue_on_error": true,
-          "function": {
-            "name": "http_call",
-            "input": {
-              "connector": "kalam-orion",
-              "method": "POST",
-              "path": "/models",
-              "body": {
-                "manifest": { "var": "data.job.admission.registration" },
-                "artifact": {
-                  "connector": { "var": "metadata.vars.models_bucket_connector" },
-                  "key": { "var": "data.job.admission.artifact.key" },
-                  "digest": { "var": "data.job.admission.artifact.digest" }
-                },
-                "tags": ["admission"]
-              },
-              "output": "temp_data.made"
-            }
-          }
+      "id": "aauth",
+      "name": "Exchange the runner key for a token",
+      "continue_on_error": true,
+      "function": { "name": "http_call", "input": { "$from": "constants.runner_token_call" } }
+    },
+    {
+      "id": "aclaim",
+      "name": "Claim one submission to admit",
+      "continue_on_error": true,
+      "function": {
+        "name": "http_call",
+        "input": {
+          "connector": "kalam-api",
+          "method": "POST",
+          "path": "/v1/runner/admissions/claim",
+          "headers": { "Authorization": { "cat": ["Bearer ", { "var": "data.tok.token" }] } },
+          "body": { "orion_version": { "var": "metadata.vars.orion_version" } },
+          "output": "data.job"
         }
-      ]
+      }
+    },
+    {
+      "id": "idle",
+      "name": "Stop when there is nothing to admit",
+      "function": {
+        "name": "filter",
+        "input": { "condition": { "!!": { "var": "data.job.claim.token" } }, "on_reject": "halt" }
+      }
+    },
+    {
+      "id": "open",
+      "name": "Open the walk",
+      "function": {
+        "name": "map",
+        "input": {
+          "mappings": [
+            { "path": "data.model", "logic": { "var": "data.job.admission.model" } },
+            { "path": "data.version_id", "logic": { "var": "data.job.admission.version_id" } },
+            { "path": "data.probing", "logic": false },
+            { "path": "data.ok", "logic": true },
+            { "path": "data.over_budget", "logic": false },
+            { "path": "data.reason", "logic": false },
+            { "path": "data.ops_max", "logic": 0 },
+            { "path": "data.infer_us_max", "logic": 0 },
+            { "path": "data.checked", "logic": 0 },
+            { "path": "data.errored", "logic": false }
+          ]
+        }
+      }
+    },
+    {
+      "id": "register",
+      "name": "Register it here, by reference and digest",
+      "continue_on_error": true,
+      "function": {
+        "name": "http_call",
+        "input": {
+          "connector": "kalam-orion",
+          "method": "POST",
+          "path": "/models",
+          "body": {
+            "manifest": { "var": "data.job.admission.registration" },
+            "artifact": {
+              "connector": { "var": "metadata.vars.models_bucket_connector" },
+              "key": { "var": "data.job.admission.artifact.key" },
+              "digest": { "var": "data.job.admission.artifact.digest" }
+            },
+            "tags": ["admission"]
+          },
+          "output": "temp_data.made"
+        }
+      }
     },
     {
       "id": "when_clear",
-      "condition": {
-        "and": [
-          { "==": [{ "var": "temp_data.i" }, 0] },
-          { "!": { "var": "temp_data.made" } }
-        ]
-      },
+      "condition": { "!": { "var": "temp_data.made" } },
       "tasks": [
         {
           "id": "clear",
@@ -147,12 +126,7 @@
     {
       "id": "admit",
       "name": "Fetch, verify, read the graph, probe it",
-      "condition": {
-        "and": [
-          { "==": [{ "var": "temp_data.i" }, 0] },
-          { "!!": { "var": "temp_data.made" } }
-        ]
-      },
+      "condition": { "!!": { "var": "temp_data.made" } },
       "continue_on_error": true,
       "function": {
         "name": "http_call",
@@ -168,12 +142,7 @@
     {
       "id": "activate",
       "name": "Activate it here, for the probe",
-      "condition": {
-        "and": [
-          { "==": [{ "var": "temp_data.i" }, 0] },
-          { "===": [{ "var": "data.adm.data.admission.state" }, "passed"] }
-        ]
-      },
+      "condition": { "===": [{ "var": "data.adm.data.admission.state" }, "passed"] },
       "continue_on_error": true,
       "function": {
         "name": "http_call",
@@ -189,7 +158,6 @@
     {
       "id": "probe_on",
       "name": "Play the observations only on a model this node admitted and activated",
-      "condition": { "==": [{ "var": "temp_data.i" }, 0] },
       "function": {
         "name": "map",
         "input": {
@@ -208,134 +176,144 @@
       }
     },
     {
-      "id": "when_reset",
-      "condition": {
-        "and": [
-          { "var": "data.probing" },
-          { "<": [{ "var": "temp_data.i" }, { "var": "data.n" }] }
-        ]
-      },
+      "id": "when_probing",
+      "condition": { "var": "data.probing" },
       "tasks": [
         {
-          "id": "reset",
-          "name": "Clear the last inference",
-          "function": {
-            "name": "map",
-            "input": {
-              "mappings": [
-                { "path": "temp_data.out", "logic": false },
-                { "path": "temp_data.st", "logic": false }
-              ]
-            }
-          }
-        },
-        {
-          "id": "infer",
-          "name": "One inference",
+          "id": "probe",
+          "name": "Every observation, one inference each, one at a time",
           "continue_on_error": true,
           "function": {
             "name": "model_infer",
             "input": {
               "model": { "var": "data.model" },
-              "input": {
-                "val": ["data", "job", "admission", "observations", { "val": ["temp_data", "i"] }]
-              },
-              "output": "temp_data.out",
+              "input": { "var": "temp_data.obs" },
+              "output": "temp_data.r.p",
               "raw": true,
               "timeout_ms": { "var": "data.job.admission.infer_ms" },
-              "stats_output": "temp_data.st"
+              "stats_output": "temp_data.r.s"
             }
+          },
+          "for_each": {
+            "over": { "var": "data.job.admission.observations" },
+            "as": "obs",
+            "max_concurrency": 1,
+            "collect": "temp_data.r",
+            "into": "temp_data.rs"
           }
         },
         {
           "id": "tally",
-          "name": "What it cost, and whether it answered",
+          "name": "What they cost, and whether each answered",
           "function": {
             "name": "map",
             "input": {
               "mappings": [
-                { "path": "data.checked", "logic": { "+": [{ "var": "data.checked" }, 1] } },
+                { "path": "data.checked", "logic": { "length": [{ "var": "temp_data.rs" }] } },
                 {
                   "path": "data.errored",
-                  "logic": {
-                    "or": [{ "var": "data.errored" }, { "!": { "var": "temp_data.out" } }]
-                  }
+                  "logic": { "some": [{ "var": "temp_data.rs" }, { "!": { "var": "p" } }] }
                 },
                 {
                   "path": "data.ops_max",
                   "logic": {
-                    "max": [
-                      { "var": "data.ops_max" },
-                      { "??": [{ "var": "temp_data.st.peak_ops" }, 0] }
+                    "reduce": [
+                      { "var": "temp_data.rs" },
+                      {
+                        "max": [
+                          { "var": "accumulator" },
+                          { "??": [{ "var": "current.s.peak_ops" }, 0] }
+                        ]
+                      },
+                      0
                     ]
                   }
                 },
                 {
                   "path": "data.infer_us_max",
                   "logic": {
-                    "max": [
-                      { "var": "data.infer_us_max" },
+                    "reduce": [
+                      { "var": "temp_data.rs" },
                       {
-                        "floor": [
+                        "max": [
+                          { "var": "accumulator" },
                           {
-                            "*": [
-                              1000,
-                              { "??": [{ "var": "temp_data.st.inference_ms" }, 0] }
+                            "floor": [
+                              {
+                                "*": [
+                                  1000,
+                                  { "??": [{ "var": "current.s.inference_ms" }, 0] }
+                                ]
+                              }
                             ]
                           }
                         ]
-                      }
+                      },
+                      0
                     ]
                   }
                 },
                 {
-                  "path": "temp_data.rank",
+                  "path": "temp_data.heads",
                   "logic": {
-                    "if": [
-                      { "!": { "var": "temp_data.out.policy" } },
-                      0,
-                      { "length": [{ "shape": [{ "var": "temp_data.out.policy" }] }] }
+                    "map": [
+                      { "var": "temp_data.rs" },
+                      {
+                        "has": { "!!": { "var": "p.policy" } },
+                        "rank": {
+                          "if": [
+                            { "!": { "var": "p.policy" } },
+                            0,
+                            { "length": [{ "shape": [{ "var": "p.policy" }] }] }
+                          ]
+                        }
+                      }
                     ]
                   }
                 },
                 {
                   "path": "data.ok",
                   "logic": {
-                    "and": [
-                      { "var": "data.ok" },
-                      { "!!": { "var": "temp_data.out.policy" } },
-                      { "in": [{ "var": "temp_data.rank" }, [2, 4]] }
+                    "reduce": [
+                      { "var": "temp_data.heads" },
+                      {
+                        "and": [
+                          { "var": "accumulator" },
+                          { "var": "current.has" },
+                          { "in": [{ "var": "current.rank" }, [2, 4]] }
+                        ]
+                      },
+                      true
                     ]
                   }
                 },
                 {
                   "path": "data.over_budget",
                   "logic": {
-                    "or": [
-                      { "var": "data.over_budget" },
-                      {
-                        ">": [
-                          { "??": [{ "var": "temp_data.st.peak_ops" }, 0] },
-                          { "var": "data.job.admission.budget_ops" }
-                        ]
-                      }
-                    ]
+                    ">": [{ "var": "data.ops_max" }, { "var": "data.job.admission.budget_ops" }]
                   }
                 },
                 {
                   "path": "data.reason",
                   "logic": {
-                    "if": [
-                      { "var": "data.reason" },
-                      { "var": "data.reason" },
-                      { "!": { "var": "temp_data.out.policy" } },
-                      "ADAPTER_INVALID",
-                      { "!": { "in": [{ "var": "temp_data.rank" }, [2, 4]] } },
-                      "HEAD_UNREADABLE",
-                      null
+                    "reduce": [
+                      { "var": "temp_data.heads" },
+                      {
+                        "if": [
+                          { "var": "accumulator" },
+                          { "var": "accumulator" },
+                          { "!": { "var": "current.has" } },
+                          "ADAPTER_INVALID",
+                          { "!": { "in": [{ "var": "current.rank" }, [2, 4]] } },
+                          "HEAD_UNREADABLE",
+                          null
+                        ]
+                      },
+                      { "var": "data.reason" }
                     ]
                   }
-                }
+                },
+                { "path": "temp_data.rs", "unset": true }
               ]
             }
           }
@@ -345,22 +323,7 @@
     {
       "id": "drop",
       "name": "Leave nothing of it on this node",
-      "condition": {
-        "and": [
-          {
-            "or": [
-              { "!": { "var": "data.probing" } },
-              {
-                ">=": [
-                  { "var": "temp_data.i" },
-                  { "-": [{ "var": "data.n" }, 1] }
-                ]
-              }
-            ]
-          },
-          { "!!": { "var": "temp_data.made" } }
-        ]
-      },
+      "condition": { "!!": { "var": "temp_data.made" } },
       "continue_on_error": true,
       "function": {
         "name": "http_call",
@@ -376,17 +339,6 @@
     {
       "id": "report",
       "name": "Report what it found",
-      "condition": {
-        "or": [
-          { "!": { "var": "data.probing" } },
-          {
-            ">=": [
-              { "var": "temp_data.i" },
-              { "-": [{ "var": "data.n" }, 1] }
-            ]
-          }
-        ]
-      },
       "continue_on_error": true,
       "function": {
         "name": "http_call",
@@ -416,29 +368,6 @@
             }
           },
           "output": "temp_data.reported"
-        }
-      }
-    },
-    {
-      "id": "end",
-      "name": "Stop once the report is sent",
-      "function": {
-        "name": "filter",
-        "input": {
-          "condition": {
-            "!": {
-              "or": [
-                { "!": { "var": "data.probing" } },
-                {
-                  ">=": [
-                    { "var": "temp_data.i" },
-                    { "-": [{ "var": "data.n" }, 1] }
-                  ]
-                }
-              ]
-            }
-          },
-          "on_reject": "halt"
         }
       }
     }
