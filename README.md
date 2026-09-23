@@ -81,7 +81,7 @@ Set in `.env`. [`docker-compose.yml`](docker-compose.yml) refuses to start witho
 | `RUNNER_SIG_DIR` | `./keys/signatures` | The deployment's plugin signatures, mounted read-only |
 | `KALAM_IMAGE` | required | The image, and so the engine: a release (`ghcr.io/tiny-brains/kalam:<version>`), or `tinybrains/kalam:dev` built from this checkout |
 | `MODELS_BUCKET` | `tinybrains-models` | The models bucket's name |
-| `RUNNER_CRON_WORKERS` | `2` | Matches at once: the match channel's `concurrency.slots`, written into it at boot, up to Orion's 64: change it here, not in the package. Orion's `cron.workers` is this plus one, for the roster |
+| `RUNNER_CRON_WORKERS` | `2` | Matches at once: the match channel's `concurrency.slots`, written into it at boot, up to Orion's 64: change it here, not in the package. Orion's `cron.workers` is this plus one, for the roster. **Soma separately caps each runner at its `runners.max_in_flight` row (default 4)**: above that, raise the row too, or the extra slots claim nothing |
 | `RUNNER_SEAT_CONCURRENCY` | cores ÷ slots | Seats of one match asked at once, 1 to 8. Slots × seats above the cores strikes seats for the machine's load |
 | `RUNNER_MAX_CACHE_BYTES` | 4 GiB | The on-disk model cache (the `runner-models` volume). The admitting runner caps its own at 256 MiB and keeps no volume |
 | `RUNNER_MAX_LOADED_BYTES` | 2 GiB | Model sessions held in memory at once |
