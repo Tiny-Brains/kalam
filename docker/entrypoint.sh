@@ -96,12 +96,10 @@ else
     ''|*[!0-9]*) echo "RUNNER_CRON_WORKERS must be a whole number of matches, got '$lanes'" >&2; exit 1 ;;
   esac
   [ "$lanes" -ge 1 ] || { echo "RUNNER_CRON_WORKERS must be at least 1" >&2; exit 1; }
-  # The ceiling is the `slots` the package ships: a node never plays more matches at once than the
-  # package was written and measured for. (Orion itself refuses a value above 64.)
-  ceiling=$(sed -n 's/.*"slots": \([0-9][0-9]*\).*/\1/p' "$PKG/channels/kalam-match.json")
-  if [ -n "$ceiling" ] && [ "$lanes" -gt "$ceiling" ]; then
-    echo "RUNNER_CRON_WORKERS=$lanes is above the $ceiling match slots the package ships" >&2; exit 1
-  fi
+  # A DEPLOYMENT SETTING, NOT A PACKAGE ONE: load-package.sh writes this into the match channel's
+  # `slots`, whatever the committed number is. Orion's own bound on `slots` is 64; what a machine
+  # can afford is its memory and cores, which RUNNER_SEAT_CONCURRENCY below divides between slots.
+  [ "$lanes" -le 64 ] || { echo "RUNNER_CRON_WORKERS must be at most 64 (Orion's bound on slots), got $lanes" >&2; exit 1; }
   KALAM_MATCH_LANES=$lanes
   KALAM_CRON_WORKERS=$((lanes + 1))
   echo "==> $KALAM_MATCH_LANES match slot(s), $KALAM_CRON_WORKERS cron workers (one is the roster's)"

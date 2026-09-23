@@ -57,8 +57,9 @@ identically, not just recorded.
   N}` admits up to N runs of that key at once, where `forbid` used to mean exactly one — so the four
   cloned channels that differed only in `channel_id` and `concurrency.key` are gone. A run reads its
   own slot as `metadata.trigger.singleton_slot`. `slots` is a LITERAL, never a reference (Orion
-  takes lock cardinality as an authoring decision), so the committed `slots` is the shipped maximum
-  and `entrypoint.sh` writes the number this node plays into its copy. `shared/kalam.json` holds the shared
+  takes lock cardinality as an authoring decision), so the committed `slots` is only a default and
+  `entrypoint.sh` writes the number this node plays (`RUNNER_CRON_WORKERS`, up to Orion's 64) into
+  its copy. It is a deployment setting: never make a node's capacity wait for a package change. `shared/kalam.json` holds the shared
   `config`; it is a shared document the admin API does not accept, so the set is always compiled
   before it is applied.
 - **A runner has one role** (`RUNNER_ROLE`), and **`scripts/load-package.sh` is the one place that

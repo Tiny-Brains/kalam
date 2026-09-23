@@ -37,7 +37,7 @@
 #   ORION_ADMIN_API_KEY     admin credential, when admin_auth is enabled
 #   PLUGIN_SIG_DIR          detached Ed25519 signatures, named <component>.sig or <plugin id>.sig
 #   KALAM_ROLE              match (default) or admit
-#   KALAM_MATCH_LANES       matches at once, as the match channel's slots (unset keeps the shipped max)
+#   KALAM_MATCH_LANES       matches at once, as the match channel's slots (unset keeps the committed 4)
 #   KALAM_SEAT_CONCURRENCY  seats one match asks at once, as `infer`'s for_each max_concurrency
 #                           (unset keeps the shipped 1: one seat at a time)
 #
@@ -89,7 +89,7 @@ else
   rm -f "$SET/channels/kalam-admit.json"
   if [ -n "${KALAM_MATCH_LANES:-}" ]; then
     # `slots` is a literal in the channel, because Orion takes lock cardinality as an authoring
-    # decision. The shipped value is the maximum; this is the number THIS node plays.
+    # decision. The committed value is a default; this is the number THIS node plays.
     ch="$SET/channels/kalam-match.json"
     sed "s/\"slots\": [0-9][0-9]*/\"slots\": $KALAM_MATCH_LANES/" "$ch" > "$ch.tmp" && mv "$ch.tmp" "$ch"
     grep -q "\"slots\": $KALAM_MATCH_LANES" "$ch" || {
