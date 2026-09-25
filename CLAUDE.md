@@ -10,7 +10,7 @@ seats asked this turn → `step` until the engine stops returning views, then fi
 registers, admits and activates on this node every version the ladder says is verified or active.
 **`kalam-admit`** is an admitting runner's only clock (`RUNNER_ROLE=admit`): claim one submission Soma
 prepared, register it, let Orion admit it, play it over the reference observations (one
-`model_infer` fanned out over them, one at a time), delete it and report. Soma runs no model and judges the report.
+`model_infer` a sweep of its loop, chained for a model with a memory), delete it and report. Soma runs no model and judges the report.
 Everything is authored JSON and committed — `workflows/`, `channels/`, `connectors/`, `sql/`,
 `shared/` — with no generator and no build step. `entrypoint.sh` copies the package aside and shapes
 THAT for this node's role and slot count before the server applies it. Kalam owns **execution only**. Soma owns the schema, the
@@ -115,7 +115,7 @@ identically, not just recorded.
   `entrypoint.sh` derives as cores ÷ slots unless `RUNNER_SEAT_CONCURRENCY` names it. Each call's
   deadline runs from the moment it asks, **the wait for Orion's inference permit included**, and
   there is one permit per core — so slots × seats above the cores strikes seats for the node's load.
-  The admission probe stays at 1: it measures one inference alone.
+  The admission probe asks one inference a sweep: it measures each alone.
 - **The board rides the claim.** The row carries `map` whole, and `world` passes it to `worldgen`,
   because the component carries no boards. `K_ROW` joins `season_maps` exactly as the gate's claim
   does.
@@ -130,6 +130,34 @@ identically, not just recorded.
   decode, the explicit `{m, seat, action}` form, omission as the no-op (a forfeited seat, or one with
   no ants), cumulative strikes, `engine_rank + seat_count` for forfeit ranks, and the flat echoed
   refs. `tinybrains conform` keeps them equal. A change here is a change there.
+- **A seat's memory is two mappings per key, and a struck turn keeps the last one.** A model may
+  declare outputs named `memory` and `ant_memory` beside `policy`. `turn` writes
+  `temp_data.v{{seat}}.memory` from `data.mem{{seat}}` (and `.ant_memory` from `data.amem{{seat}}`)
+  before `temp_data.live` copies the views, so the seat's view carries them under those keys; the
+  end of `acts` writes `data.mem{{seat}}` from `temp_data.p{{seat}}.memory ?? data.mem{{seat}}`. A
+  failed call leaves `p{{seat}}` unset, so the `??` keeps the last memory, and `on_null: "unset"`
+  keeps the key absent until a call first writes one: absent on turn 0, carried through a strike,
+  never shared between seats (each has its own slot, even two seats of one model), gone with the
+  run. A model that declares neither never has a key written. The view's top-level `memory` and
+  `ant_memory` are the runner's, and ants' engine test asserts it never emits either. The value is
+  the raw output tensor; `cli/src/wave.rs` carries the same keys under the same rules, and `conform`
+  fails on the first memory match where they differ.
+- **The admission probe is a loop, because a `for_each` cannot chain.** Every `for_each` element
+  runs on a copy taken before the first call, so no element sees another's output.
+  `kalam-admit-run` is a workflow loop: the claim, the registration and the admission are its
+  `setup`, `over` is the observations plus one element, each sweep plays one observation into a
+  fresh `scratch` (`temp_data.r`, so a failed call leaves no stale answer), and the extra sweep
+  deletes and reports. **Its `max` (1024) must stay above Soma's `admit_observations`**, or the
+  report sweep never comes and every submission expires; nothing checks it. For a model whose
+  registration declares `memory` or `ant_memory` (`data.remembers`), observation i is fed call
+  i-1's outputs of those names when observation i-1 has the same `size` and its call answered, so
+  the chain restarts at each board's run and after a failed call. `probe.round_trip` is
+  `{checked, failed}` — calls fed a memory, and those of them that failed — and is absent for a
+  model that declares neither. **A fed call that fails counts in `round_trip.failed` and nowhere
+  else** (`temp_data.lost`): Soma reads `errored` as a probe that decided nothing and sends the
+  submission back to the queue, so the same failure in `errored` or `reason` would hide
+  `MEMORY_ROUND_TRIP` until the submission expired. The key names are a contract with Soma's
+  `admission_facts()`, so `grep round_trip` in Soma's migration before renaming one.
 - **A seat with no ants is not asked.** Its decoded action would be `[]`, which is falsy and would
   be struck as a miss.
 - **The strike ceiling comes off the match row** (`matches.strike_ceiling`, stamped by pair from the
@@ -191,7 +219,8 @@ Orion:
   `max_concurrency` copies are alive at once, and every write in a copy is captured whatever the run
   says — the fold drops them again when capture is off. `orion-server test` and `dry-run` run with
   capture on and a per-step trace, so a long match there costs tens of GB that a node never spends:
-  test a match offline in tens of turns, not a thousand.
+  test a match offline in tens of turns, not a thousand, and an admission in tens of
+  observations: `kalam-admit-run` is a loop too, and 64 observations there take about 9 GB.
 - **Orion's static analysis does not read `for_each.into` or `for_each.over`** as a write or a read.
   `perf.redundant_step_condition` can then propose a group that is wrong, and `clippy --fix` would
   apply it: check what reads an `into` path before accepting one.
@@ -248,7 +277,13 @@ Other:
   web's `configs.sh` checks both, and the admission claim refuses a runner on another Orion.
 - **Soma's `admit_observations` × `admit_infer_ms` must fit `kalam-admit`'s `timeout_ms`.** The probe
   plays every observation the claim carries, one at a time, each up to its deadline; a run cut off
-  by its timeout never reports, and the submission expires. web's `configs.sh` checks it.
+  by its timeout never reports, and the submission expires. web's `configs.sh` checks it. The
+  memory round trip chains the same observations rather than playing any twice, so it adds no
+  call and leaves this product where it was.
+- **The device is `[models.runtimes.tract] device = "cpu"`** in `runner.toml.tmpl`. Orion reads a
+  device per runtime, and `[models]` refuses a key it does not know, so `device` there stops the
+  node at boot. It is pinned, not left to the default, because a memory fed back for a thousand
+  turns turns an accelerator's last-digit difference into a different move.
 - **`models.max_probe_ms` is pinned in `runner.toml.tmpl`**, because the admitting runner admits
   under it and every match runner's roster re-admits the same versions under it. It equals the
   cartridge's `limits.turn_ms` (web's `configs.sh` checks it), and `tinybrains check` measures the

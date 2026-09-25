@@ -192,6 +192,18 @@ max_output_elements = 1048576
 # web's scripts/check/configs.sh asserts that equality rather than trusting it.
 max_timeout_ms = ${RUNNER_MAX_TIMEOUT_MS:-60000}
 
+# THE DEVICE IS PINNED, NOT DEFAULTED. `cpu` is what Orion runs when nothing names a device, and it is
+# written here so that no operator's override can turn an accelerator on silently. The CPU path is
+# deterministic; an accelerator agrees with it only to about f32 epsilon, and a model's memory feeds
+# that last digit back to it every turn for a thousand turns, until a move differs from the one
+# `tinybrains conform` replays. It is also the faster device for every graph a weight class admits:
+# Orion measures metal 36x slower per inference on a graph this size. Orion reads the device per
+# runtime, so this is `[models.runtimes.tract]` -- `[models]` itself refuses a key it does not know,
+# and the node would not boot. web's configs.sh checks it.
+[models.runtimes.tract]
+enabled = true
+device = "cpu"
+
 [cron]
 # The INNER deadline on a draining match; shutdown_force_timeout_secs above is the outer one. Equal
 # to it, so neither surprises.

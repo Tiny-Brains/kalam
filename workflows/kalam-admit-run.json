@@ -1,289 +1,383 @@
 {
   "workflow_id": "kalam-admit-run",
   "name": "Kalam: admit one submission",
-  "description": "An ADMITTING runner's clock (RUNNER_ROLE=admit). Claims one submission Soma's admit clock prepared, registers it on this node from the registration Soma rebuilt, lets Orion admit it, activates it, plays it over every reference observation the claim carried -- one `model_infer` fanned out over them, one at a time, so each is timed alone -- deletes it, and reports Orion's record, its stats and the probe's tally to the gate. Soma judges the report; nothing here decides whose fault anything is. A run that dies reports nothing, and the lease lapsing hands the row to the next claim.",
+  "description": "An ADMITTING runner's clock (RUNNER_ROLE=admit). Claims one submission Soma's admit clock prepared, registers it on this node from the registration Soma rebuilt, lets Orion admit it, activates it, plays it over every reference observation the claim carried -- one `model_infer` a sweep, so each is timed alone -- deletes it, and reports Orion's record, its stats and the probe's tally to the gate. The claim, the registration and the admission are the loop's setup, and the sweep after the last observation is the one that deletes and reports; the loop's max (1024) must stay above the observations Soma sends. A model whose registration declares an output named `memory` or `ant_memory` is fed, with observation i, what call i-1 answered under those names, when observation i-1 has the same `size` and its call answered, so the observations are chained within each board's run and none is played twice; the report's `probe.round_trip` counts the calls that were fed a memory (`checked`) and those of them that failed (`failed`), and is absent for a model that declares neither. A fed call that fails counts there and nowhere else, since Soma reads `errored` as a probe that decided nothing. Soma judges the report; nothing here decides whose fault anything is. A run that dies reports nothing, and the lease lapsing hands the row to the next claim.",
   "tags": ["kalam", "clock", "admission"],
   "condition": true,
+  "loop": {
+    "counter": "k",
+    "max": 1024,
+    "setup": [
+      {
+        "id": "aauth",
+        "name": "Exchange the runner key for a token",
+        "continue_on_error": true,
+        "function": { "name": "http_call", "input": { "$from": "constants.runner_token_call" } }
+      },
+      {
+        "id": "aclaim",
+        "name": "Claim one submission to admit",
+        "continue_on_error": true,
+        "function": {
+          "name": "http_call",
+          "input": {
+            "connector": "kalam-api",
+            "method": "POST",
+            "path": "/v1/runner/admissions/claim",
+            "headers": { "Authorization": { "cat": ["Bearer ", { "var": "data.tok.token" }] } },
+            "body": { "orion_version": { "var": "metadata.vars.orion_version" } },
+            "output": "data.job"
+          }
+        }
+      },
+      {
+        "id": "idle",
+        "name": "Stop when there is nothing to admit",
+        "function": {
+          "name": "filter",
+          "input": { "condition": { "!!": { "var": "data.job.claim.token" } }, "on_reject": "halt" }
+        }
+      },
+      {
+        "id": "open",
+        "name": "Open the walk",
+        "function": {
+          "name": "map",
+          "input": {
+            "mappings": [
+              { "path": "data.model", "logic": { "var": "data.job.admission.model" } },
+              { "path": "data.version_id", "logic": { "var": "data.job.admission.version_id" } },
+              { "path": "data.probing", "logic": false },
+              { "path": "data.ok", "logic": true },
+              { "path": "data.over_budget", "logic": false },
+              { "path": "data.reason", "logic": false },
+              { "path": "data.ops_max", "logic": 0 },
+              { "path": "data.infer_us_max", "logic": 0 },
+              { "path": "data.checked", "logic": 0 },
+              { "path": "data.errored", "logic": false },
+              { "path": "data.remembers", "logic": false },
+              { "path": "data.rt_checked", "logic": 0 },
+              { "path": "data.rt_failed", "logic": 0 }
+            ]
+          }
+        }
+      },
+      {
+        "id": "register",
+        "name": "Register it here, by reference and digest",
+        "continue_on_error": true,
+        "function": {
+          "name": "http_call",
+          "input": {
+            "connector": "kalam-orion",
+            "method": "POST",
+            "path": "/models",
+            "body": {
+              "manifest": { "var": "data.job.admission.registration" },
+              "artifact": {
+                "connector": { "var": "metadata.vars.models_bucket_connector" },
+                "key": { "var": "data.job.admission.artifact.key" },
+                "digest": { "var": "data.job.admission.artifact.digest" }
+              },
+              "tags": ["admission"]
+            },
+            "output": "temp_data.made"
+          }
+        }
+      },
+      {
+        "id": "when_clear",
+        "condition": { "!": { "var": "temp_data.made" } },
+        "tasks": [
+          {
+            "id": "clear",
+            "name": "Remove what a dead walk left here",
+            "continue_on_error": true,
+            "function": {
+              "name": "http_call",
+              "input": {
+                "connector": "kalam-orion",
+                "method": "DELETE",
+                "path": { "cat": ["/models/", { "var": "data.model" }] },
+                "output": "temp_data.cleared",
+                "response_format": "text"
+              }
+            }
+          },
+          {
+            "id": "reregister",
+            "name": "Register it again, from nothing",
+            "continue_on_error": true,
+            "function": {
+              "name": "http_call",
+              "input": {
+                "connector": "kalam-orion",
+                "method": "POST",
+                "path": "/models",
+                "body": {
+                  "manifest": { "var": "data.job.admission.registration" },
+                  "artifact": {
+                    "connector": { "var": "metadata.vars.models_bucket_connector" },
+                    "key": { "var": "data.job.admission.artifact.key" },
+                    "digest": { "var": "data.job.admission.artifact.digest" }
+                  },
+                  "tags": ["admission"]
+                },
+                "output": "temp_data.made"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "admit",
+        "name": "Fetch, verify, read the graph, probe it",
+        "condition": { "!!": { "var": "temp_data.made" } },
+        "continue_on_error": true,
+        "function": {
+          "name": "http_call",
+          "input": {
+            "connector": "kalam-orion",
+            "method": "POST",
+            "path": { "cat": ["/models/", { "var": "data.model" }, "/admit?wait=true"] },
+            "output": "data.adm",
+            "timeout_ms": 180000
+          }
+        }
+      },
+      {
+        "id": "activate",
+        "name": "Activate it here, for the probe",
+        "condition": { "===": [{ "var": "data.adm.data.admission.state" }, "passed"] },
+        "continue_on_error": true,
+        "function": {
+          "name": "http_call",
+          "input": {
+            "connector": "kalam-orion",
+            "method": "PATCH",
+            "path": { "cat": ["/models/", { "var": "data.model" }, "/status"] },
+            "body": { "status": "active" },
+            "output": "temp_data.act"
+          }
+        }
+      },
+      {
+        "id": "probe_on",
+        "name": "Play the observations only on a model this node admitted and activated, and chain its memory if it declares one",
+        "function": {
+          "name": "map",
+          "input": {
+            "mappings": [
+              {
+                "path": "data.probing",
+                "logic": {
+                  "and": [
+                    { "===": [{ "var": "data.adm.data.admission.state" }, "passed"] },
+                    { "!!": { "var": "temp_data.act" } }
+                  ]
+                }
+              },
+              {
+                "path": "temp_data.n",
+                "logic": {
+                  "if": [
+                    { "var": "data.probing" },
+                    { "length": [{ "var": "data.job.admission.observations" }] },
+                    0
+                  ]
+                }
+              },
+              {
+                "path": "data.remembers",
+                "logic": {
+                  "!!": [
+                    {
+                      "some": [
+                        { "??": [{ "var": "data.job.admission.registration.outputs" }, []] },
+                        { "in": [{ "var": "name" }, ["memory", "ant_memory"]] }
+                      ]
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "over": {
+      "merge": [
+        { "if": [{ "var": "data.probing" }, { "var": "data.job.admission.observations" }, []] },
+        [{}]
+      ]
+    },
+    "as": "obs",
+    "scratch": "r"
+  },
   "tasks": [
     {
-      "id": "aauth",
-      "name": "Exchange the runner key for a token",
-      "continue_on_error": true,
-      "function": { "name": "http_call", "input": { "$from": "constants.runner_token_call" } }
-    },
-    {
-      "id": "aclaim",
-      "name": "Claim one submission to admit",
-      "continue_on_error": true,
-      "function": {
-        "name": "http_call",
-        "input": {
-          "connector": "kalam-api",
-          "method": "POST",
-          "path": "/v1/runner/admissions/claim",
-          "headers": { "Authorization": { "cat": ["Bearer ", { "var": "data.tok.token" }] } },
-          "body": { "orion_version": { "var": "metadata.vars.orion_version" } },
-          "output": "data.job"
-        }
-      }
-    },
-    {
-      "id": "idle",
-      "name": "Stop when there is nothing to admit",
-      "function": {
-        "name": "filter",
-        "input": { "condition": { "!!": { "var": "data.job.claim.token" } }, "on_reject": "halt" }
-      }
-    },
-    {
-      "id": "open",
-      "name": "Open the walk",
-      "function": {
-        "name": "map",
-        "input": {
-          "mappings": [
-            { "path": "data.model", "logic": { "var": "data.job.admission.model" } },
-            { "path": "data.version_id", "logic": { "var": "data.job.admission.version_id" } },
-            { "path": "data.probing", "logic": false },
-            { "path": "data.ok", "logic": true },
-            { "path": "data.over_budget", "logic": false },
-            { "path": "data.reason", "logic": false },
-            { "path": "data.ops_max", "logic": 0 },
-            { "path": "data.infer_us_max", "logic": 0 },
-            { "path": "data.checked", "logic": 0 },
-            { "path": "data.errored", "logic": false }
-          ]
-        }
-      }
-    },
-    {
-      "id": "register",
-      "name": "Register it here, by reference and digest",
-      "continue_on_error": true,
-      "function": {
-        "name": "http_call",
-        "input": {
-          "connector": "kalam-orion",
-          "method": "POST",
-          "path": "/models",
-          "body": {
-            "manifest": { "var": "data.job.admission.registration" },
-            "artifact": {
-              "connector": { "var": "metadata.vars.models_bucket_connector" },
-              "key": { "var": "data.job.admission.artifact.key" },
-              "digest": { "var": "data.job.admission.artifact.digest" }
-            },
-            "tags": ["admission"]
-          },
-          "output": "temp_data.made"
-        }
-      }
-    },
-    {
-      "id": "when_clear",
-      "condition": { "!": { "var": "temp_data.made" } },
+      "id": "when_probing",
+      "condition": { "<": [{ "var": "temp_data.k" }, { "var": "temp_data.n" }] },
       "tasks": [
         {
-          "id": "clear",
-          "name": "Remove what a dead walk left here",
-          "continue_on_error": true,
+          "id": "view",
+          "name": "The observation, and the memory the last call wrote when it is on the same board",
           "function": {
-            "name": "http_call",
+            "name": "map",
             "input": {
-              "connector": "kalam-orion",
-              "method": "DELETE",
-              "path": { "cat": ["/models/", { "var": "data.model" }] },
-              "output": "temp_data.cleared",
-              "response_format": "text"
+              "mappings": [
+                {
+                  "path": "temp_data.fed",
+                  "logic": {
+                    "!!": [
+                      {
+                        "and": [
+                          { "var": "data.remembers" },
+                          { "var": "temp_data.prev_ok" },
+                          {
+                            "===": [
+                              { "val": ["temp_data", "obs", "size", 0] },
+                              { "var": "temp_data.prev_rows" }
+                            ]
+                          },
+                          {
+                            "===": [
+                              { "val": ["temp_data", "obs", "size", 1] },
+                              { "var": "temp_data.prev_cols" }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                },
+                { "path": "temp_data.view", "logic": { "var": "temp_data.obs" } },
+                {
+                  "path": "temp_data.view.memory",
+                  "logic": {
+                    "if": [{ "var": "temp_data.fed" }, { "var": "temp_data.prev_memory" }, null]
+                  },
+                  "on_null": "unset"
+                },
+                {
+                  "path": "temp_data.view.ant_memory",
+                  "logic": {
+                    "if": [{ "var": "temp_data.fed" }, { "var": "temp_data.prev_ant_memory" }, null]
+                  },
+                  "on_null": "unset"
+                }
+              ]
             }
           }
         },
         {
-          "id": "reregister",
-          "name": "Register it again, from nothing",
-          "continue_on_error": true,
-          "function": {
-            "name": "http_call",
-            "input": {
-              "connector": "kalam-orion",
-              "method": "POST",
-              "path": "/models",
-              "body": {
-                "manifest": { "var": "data.job.admission.registration" },
-                "artifact": {
-                  "connector": { "var": "metadata.vars.models_bucket_connector" },
-                  "key": { "var": "data.job.admission.artifact.key" },
-                  "digest": { "var": "data.job.admission.artifact.digest" }
-                },
-                "tags": ["admission"]
-              },
-              "output": "temp_data.made"
-            }
-          }
-        }
-      ]
-    },
-    {
-      "id": "admit",
-      "name": "Fetch, verify, read the graph, probe it",
-      "condition": { "!!": { "var": "temp_data.made" } },
-      "continue_on_error": true,
-      "function": {
-        "name": "http_call",
-        "input": {
-          "connector": "kalam-orion",
-          "method": "POST",
-          "path": { "cat": ["/models/", { "var": "data.model" }, "/admit?wait=true"] },
-          "output": "data.adm",
-          "timeout_ms": 180000
-        }
-      }
-    },
-    {
-      "id": "activate",
-      "name": "Activate it here, for the probe",
-      "condition": { "===": [{ "var": "data.adm.data.admission.state" }, "passed"] },
-      "continue_on_error": true,
-      "function": {
-        "name": "http_call",
-        "input": {
-          "connector": "kalam-orion",
-          "method": "PATCH",
-          "path": { "cat": ["/models/", { "var": "data.model" }, "/status"] },
-          "body": { "status": "active" },
-          "output": "temp_data.act"
-        }
-      }
-    },
-    {
-      "id": "probe_on",
-      "name": "Play the observations only on a model this node admitted and activated",
-      "function": {
-        "name": "map",
-        "input": {
-          "mappings": [
-            {
-              "path": "data.probing",
-              "logic": {
-                "and": [
-                  { "===": [{ "var": "data.adm.data.admission.state" }, "passed"] },
-                  { "!!": { "var": "temp_data.act" } }
-                ]
-              }
-            }
-          ]
-        }
-      }
-    },
-    {
-      "id": "when_probing",
-      "condition": { "var": "data.probing" },
-      "tasks": [
-        {
           "id": "probe",
-          "name": "Every observation, one inference each, one at a time",
+          "name": "This sweep's observation, one inference, alone",
           "continue_on_error": true,
           "function": {
             "name": "model_infer",
             "input": {
               "model": { "var": "data.model" },
-              "input": { "var": "temp_data.obs" },
+              "input": { "var": "temp_data.view" },
               "output": "temp_data.r.p",
               "raw": true,
               "timeout_ms": { "var": "data.job.admission.infer_ms" },
               "stats_output": "temp_data.r.s"
             }
-          },
-          "for_each": {
-            "over": { "var": "data.job.admission.observations" },
-            "as": "obs",
-            "max_concurrency": 1,
-            "collect": "temp_data.r",
-            "into": "temp_data.rs"
           }
         },
         {
           "id": "tally",
-          "name": "What they cost, and whether each answered",
+          "name": "What it cost, whether it answered, and what it hands the next observation",
           "function": {
             "name": "map",
             "input": {
               "mappings": [
-                { "path": "data.checked", "logic": { "length": [{ "var": "temp_data.rs" }] } },
+                {
+                  "path": "temp_data.lost",
+                  "logic": {
+                    "!!": [
+                      { "and": [{ "var": "temp_data.fed" }, { "!": { "var": "temp_data.r.p" } }] }
+                    ]
+                  }
+                },
+                { "path": "data.checked", "logic": { "+": [{ "var": "data.checked" }, 1] } },
                 {
                   "path": "data.errored",
-                  "logic": { "some": [{ "var": "temp_data.rs" }, { "!": { "var": "p" } }] }
+                  "logic": {
+                    "!!": [
+                      {
+                        "or": [
+                          { "var": "data.errored" },
+                          {
+                            "and": [
+                              { "!": { "var": "temp_data.fed" } },
+                              { "!": { "var": "temp_data.r.p" } }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
                 },
                 {
                   "path": "data.ops_max",
                   "logic": {
-                    "reduce": [
-                      { "var": "temp_data.rs" },
-                      {
-                        "max": [
-                          { "var": "accumulator" },
-                          { "??": [{ "var": "current.s.peak_ops" }, 0] }
-                        ]
-                      },
-                      0
+                    "max": [
+                      { "var": "data.ops_max" },
+                      { "??": [{ "var": "temp_data.r.s.peak_ops" }, 0] }
                     ]
                   }
                 },
                 {
                   "path": "data.infer_us_max",
                   "logic": {
-                    "reduce": [
-                      { "var": "temp_data.rs" },
+                    "max": [
+                      { "var": "data.infer_us_max" },
                       {
-                        "max": [
-                          { "var": "accumulator" },
+                        "floor": [
                           {
-                            "floor": [
-                              {
-                                "*": [
-                                  1000,
-                                  { "??": [{ "var": "current.s.inference_ms" }, 0] }
-                                ]
-                              }
+                            "*": [
+                              1000,
+                              { "??": [{ "var": "temp_data.r.s.inference_ms" }, 0] }
                             ]
                           }
                         ]
-                      },
-                      0
+                      }
                     ]
                   }
                 },
+                { "path": "temp_data.has", "logic": { "!!": { "var": "temp_data.r.p.policy" } } },
                 {
-                  "path": "temp_data.heads",
+                  "path": "temp_data.rank",
                   "logic": {
-                    "map": [
-                      { "var": "temp_data.rs" },
-                      {
-                        "has": { "!!": { "var": "p.policy" } },
-                        "rank": {
-                          "if": [
-                            { "!": { "var": "p.policy" } },
-                            0,
-                            { "length": [{ "shape": [{ "var": "p.policy" }] }] }
-                          ]
-                        }
-                      }
+                    "if": [
+                      { "!": { "var": "temp_data.r.p.policy" } },
+                      0,
+                      { "length": [{ "shape": [{ "var": "temp_data.r.p.policy" }] }] }
                     ]
                   }
                 },
                 {
                   "path": "data.ok",
                   "logic": {
-                    "reduce": [
-                      { "var": "temp_data.heads" },
+                    "!!": [
                       {
                         "and": [
-                          { "var": "accumulator" },
-                          { "var": "current.has" },
-                          { "in": [{ "var": "current.rank" }, [2, 4]] }
+                          { "var": "data.ok" },
+                          {
+                            "or": [
+                              { "var": "temp_data.lost" },
+                              {
+                                "and": [
+                                  { "var": "temp_data.has" },
+                                  { "in": [{ "var": "temp_data.rank" }, [2, 4]] }
+                                ]
+                              }
+                            ]
+                          }
                         ]
-                      },
-                      true
+                      }
                     ]
                   }
                 },
@@ -296,24 +390,56 @@
                 {
                   "path": "data.reason",
                   "logic": {
-                    "reduce": [
-                      { "var": "temp_data.heads" },
-                      {
-                        "if": [
-                          { "var": "accumulator" },
-                          { "var": "accumulator" },
-                          { "!": { "var": "current.has" } },
-                          "ADAPTER_INVALID",
-                          { "!": { "in": [{ "var": "current.rank" }, [2, 4]] } },
-                          "HEAD_UNREADABLE",
-                          null
-                        ]
-                      },
-                      { "var": "data.reason" }
+                    "if": [
+                      { "var": "data.reason" },
+                      { "var": "data.reason" },
+                      { "var": "temp_data.lost" },
+                      null,
+                      { "!": { "var": "temp_data.has" } },
+                      "ADAPTER_INVALID",
+                      { "!": { "in": [{ "var": "temp_data.rank" }, [2, 4]] } },
+                      "HEAD_UNREADABLE",
+                      null
                     ]
                   }
                 },
-                { "path": "temp_data.rs", "unset": true }
+                {
+                  "path": "data.rt_checked",
+                  "logic": {
+                    "+": [
+                      { "var": "data.rt_checked" },
+                      { "if": [{ "var": "temp_data.fed" }, 1, 0] }
+                    ]
+                  }
+                },
+                {
+                  "path": "data.rt_failed",
+                  "logic": {
+                    "+": [
+                      { "var": "data.rt_failed" },
+                      { "if": [{ "var": "temp_data.lost" }, 1, 0] }
+                    ]
+                  }
+                },
+                { "path": "temp_data.prev_ok", "logic": { "!!": { "var": "temp_data.r.p" } } },
+                {
+                  "path": "temp_data.prev_rows",
+                  "logic": { "val": ["temp_data", "obs", "size", 0] }
+                },
+                {
+                  "path": "temp_data.prev_cols",
+                  "logic": { "val": ["temp_data", "obs", "size", 1] }
+                },
+                {
+                  "path": "temp_data.prev_memory",
+                  "logic": { "var": "temp_data.r.p.memory" },
+                  "on_null": "unset"
+                },
+                {
+                  "path": "temp_data.prev_ant_memory",
+                  "logic": { "var": "temp_data.r.p.ant_memory" },
+                  "on_null": "unset"
+                }
               ]
             }
           }
@@ -321,55 +447,87 @@
       ]
     },
     {
-      "id": "drop",
-      "name": "Leave nothing of it on this node",
-      "condition": { "!!": { "var": "temp_data.made" } },
-      "continue_on_error": true,
-      "function": {
-        "name": "http_call",
-        "input": {
-          "connector": "kalam-orion",
-          "method": "DELETE",
-          "path": { "cat": ["/models/", { "var": "data.model" }] },
-          "output": "temp_data.dropped",
-          "response_format": "text"
-        }
-      }
-    },
-    {
-      "id": "report",
-      "name": "Report what it found",
-      "continue_on_error": true,
-      "function": {
-        "name": "http_call",
-        "input": {
-          "connector": "kalam-api",
-          "method": "POST",
-          "path": { "cat": ["/v1/runner/admissions/", { "var": "data.version_id" }, "/report"] },
-          "headers": { "Authorization": { "cat": ["Bearer ", { "var": "data.tok.token" }] } },
-          "body": {
-            "claim_token": { "var": "data.job.claim.token" },
-            "admission": { "var": "data.adm.data.admission" },
-            "stats": { "var": "data.adm.data.stats" },
-            "probe": {
-              "if": [
-                { "var": "data.probing" },
+      "id": "when_done",
+      "condition": { "===": [{ "var": "temp_data.k" }, { "var": "temp_data.n" }] },
+      "tasks": [
+        {
+          "id": "facts",
+          "name": "The probe's tally, and the round trip when the model declares a memory",
+          "condition": { "var": "data.probing" },
+          "function": {
+            "name": "map",
+            "input": {
+              "mappings": [
                 {
-                  "ok": { "var": "data.ok" },
-                  "over_budget": { "var": "data.over_budget" },
-                  "reason": { "var": "data.reason" },
-                  "ops_max": { "var": "data.ops_max" },
-                  "infer_us_max": { "var": "data.infer_us_max" },
-                  "checked": { "var": "data.checked" },
-                  "errored": { "var": "data.errored" }
+                  "path": "temp_data.probe",
+                  "logic": {
+                    "ok": { "var": "data.ok" },
+                    "over_budget": { "var": "data.over_budget" },
+                    "reason": { "var": "data.reason" },
+                    "ops_max": { "var": "data.ops_max" },
+                    "infer_us_max": { "var": "data.infer_us_max" },
+                    "checked": { "var": "data.checked" },
+                    "errored": { "var": "data.errored" }
+                  }
                 },
-                null
+                {
+                  "path": "temp_data.probe.round_trip",
+                  "logic": {
+                    "if": [
+                      { "var": "data.remembers" },
+                      {
+                        "checked": { "var": "data.rt_checked" },
+                        "failed": { "var": "data.rt_failed" }
+                      },
+                      null
+                    ]
+                  },
+                  "on_null": "unset"
+                }
               ]
             }
-          },
-          "output": "temp_data.reported"
+          }
+        },
+        {
+          "id": "drop",
+          "name": "Leave nothing of it on this node",
+          "condition": { "!!": { "var": "temp_data.made" } },
+          "continue_on_error": true,
+          "function": {
+            "name": "http_call",
+            "input": {
+              "connector": "kalam-orion",
+              "method": "DELETE",
+              "path": { "cat": ["/models/", { "var": "data.model" }] },
+              "output": "temp_data.dropped",
+              "response_format": "text"
+            }
+          }
+        },
+        {
+          "id": "report",
+          "name": "Report what it found",
+          "continue_on_error": true,
+          "function": {
+            "name": "http_call",
+            "input": {
+              "connector": "kalam-api",
+              "method": "POST",
+              "path": {
+                "cat": ["/v1/runner/admissions/", { "var": "data.version_id" }, "/report"]
+              },
+              "headers": { "Authorization": { "cat": ["Bearer ", { "var": "data.tok.token" }] } },
+              "body": {
+                "claim_token": { "var": "data.job.claim.token" },
+                "admission": { "var": "data.adm.data.admission" },
+                "stats": { "var": "data.adm.data.stats" },
+                "probe": { "if": [{ "var": "data.probing" }, { "var": "temp_data.probe" }, null] }
+              },
+              "output": "temp_data.reported"
+            }
+          }
         }
-      }
+      ]
     }
   ]
 }

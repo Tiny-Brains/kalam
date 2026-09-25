@@ -4,7 +4,8 @@ Kalam is the TinyBrains match runner. It is an Orion 1.9.1 package (cron channel
 connectors) shipped inside a runnable image, `ghcr.io/tiny-brains/kalam`: orion-server,
 the package, and the Ants engine from one ants release. A runner claims queued matches through
 [Soma](https://github.com/Tiny-Brains/soma)'s runner gate, plays them turn by turn on Orion's own
-model runtime, and posts the result, the replay and the match's last frame back. The same image in its other role, an
+model runtime, and posts the result, the replay and the match's last frame back. A model that
+declares a `memory` or `ant_memory` output gets it back on its next turn, for the rest of the match. The same image in its other role, an
 **admitting runner** (`RUNNER_ROLE=admit`), admits submissions: Soma runs no model, so every
 submission is registered, admitted and played over the game's reference observations on one of
 these, and Soma judges the report. Either way it holds no database credential and binds no public
@@ -105,7 +106,8 @@ Compose also sets one value you should not override: `ORION_ADMIN_BEARER` is
 The node's Orion config is [`docker/runner.toml.tmpl`](docker/runner.toml.tmpl): api mode, the
 engine digest (derived by the entrypoint from the component), the model cache, `engine.ops_budget`,
 `models.max_timeout_ms` and `models.max_probe_ms`, admission's one timing gate, pinned so every
-runner admits a model under the same number. Compose sets `RUNNER_ROLE=admit` on the `admit`
+runner admits a model under the same number, and the device, pinned to `cpu`
+(`[models.runtimes.tract]`), so that no override turns an accelerator on without anyone deciding to. Compose sets `RUNNER_ROLE=admit` on the `admit`
 service and nothing on `runner`, whose role is `match`. The terms a match is played under (`turn_ms`, `max_turns`, the lease
 and renew interval, the refusal and strike ceilings, the replay and model prefixes) arrive on each
 claim from the match's season, and are not configured here.
@@ -189,6 +191,12 @@ prepared (`POST /v1/runner/admissions/claim`), registers it on its own node from
 Soma rebuilt, lets Orion admit it, plays it over up to 64 reference observations, deletes it, and
 reports (`POST /v1/runner/admissions/{id}/report`). Soma decides.
 
+A model that declares a memory output is fed its own memory during the probe: each observation gets
+the memory the previous call wrote, when both are on a board of the same size and that call answered.
+The report's `probe.round_trip` says how many calls were fed a memory (`checked`) and how many of them
+failed (`failed`), and Soma rejects a model with any failure as `MEMORY_ROUND_TRIP`. No observation
+is played twice, so an admission takes no longer.
+
 - **One per deployment is enough**, and nothing is admitted while none is up: submissions wait in
   `testing` without spending an attempt. A second one only shares the queue.
 - **Put it where matches are fewest.** A probe measured over `max_probe_ms` on a busy machine is sent
@@ -255,6 +263,7 @@ while it is plainly switched on.
 | Rows stay `running` after a restart | The drain was cut short: Docker's grace period ran out before Orion's | Keep `RUNNER_STOP_GRACE` above drain + force. The rows are reaped when their lease lapses |
 | Submissions stay `testing` (phase `queued`) | No admitting runner is up, or its claim is refused | Start one with `--profile admit`. A 409 `orion_version_differs` in its log means its image is not on Soma's Orion |
 | A submission expires `TIMED_OUT` | Every attempt's report decided nothing: the runner could not fetch it, ran out of time, or an inference failed outright, or the probe was over `max_probe_ms` on some attempts but not all | `admissions.requeued_for` names the last reason |
+| A submission is rejected `MEMORY_ROUND_TRIP` | The model declares a `memory` or `ant_memory` output, and a call the probe fed its own memory failed. Usually the memory input's adapter or shape cannot take what the output wrote | The competitor's to fix. `tinybrains` carries memory the same way, so a local match shows the failing turn |
 | A submission expires `PROBE_TOO_SLOW` | The probe's median was over `max_probe_ms` (the game's `turn_ms`) on every attempt | The model is slower than a turn at its `probe_dims`; the version's `infer_us` is the last median |
 
 ## Developing the package
@@ -365,6 +374,12 @@ plugins/tb-ants/               optional local engine for lint (gitignored)
   nothing else, so an admission never shares a node with a match.
 - **An admitting runner reports and never decides.** It registers what Soma rebuilt, never the
   competitor's manifest, deletes what it registered, and sends Orion's record as it answered.
+- **A seat's memory is its own, and lasts one match.** When a model declares an output named
+  `memory` or `ant_memory`, the runner hands that output of the seat's last answered call back on
+  the seat's next view, under the same key. It is absent on turn 0, kept unchanged through a struck
+  turn, never shared between seats, even two seats of one model, and gone when the match ends. The
+  referee reads only `policy`, and the replay carries no memory. A model that declares neither plays
+  exactly as it would without this.
 - **Game state stays opaque.** No workflow interprets `wave_state`, an observation, an action or a
   ref. The policy head is the one tensor the platform reads, because a manifest cannot decode it.
 - **A match's terms come from its season, on the claim.** That includes the strike ceiling, which is
@@ -403,6 +418,12 @@ plugins/tb-ants/               optional local engine for lint (gitignored)
 - Every `infer` element copies the whole message, so a turn copies the match's context once per
   seat asked. It is freed as the call ends, but it is CPU a match spends on bookkeeping.
 - The `db`-mode branch is still in the package as a rollback. CLAUDE.md has the removal checklist.
+- Nobody has checked whether tract's CPU kernels give bit-identical results on arm64 and amd64.
+  Images ship for both, and a memory fed back every turn is where a difference would change a move.
+  Play one memory match on each architecture and compare the replays before a season allows memory.
+- A 1000-turn match with a large-class memory on the largest board has not been played on a real
+  runner, so its RSS is unmeasured. `orion-server test` cannot measure it: capture there costs
+  tens of GB.
 
 ## License
 

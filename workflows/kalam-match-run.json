@@ -1,7 +1,7 @@
 {
   "workflow_id": "kalam-match-run",
   "name": "Kalam: one match, turn by turn",
-  "description": "Claim ONE queued row on this replica's engine digest and play it: observe, one `model_infer` per live seat, step, until the engine stops returning views. The row is finished in place, with its replay under a key naming the attempt. Every statement is conditioned on the claim token, so a stale attempt updates nothing. It reads no rating and writes no rating, and its database role cannot reach one. In `api` mode every statement is a call to Soma's runner gate (/v1/runner/*). On SIGTERM Orion stops claiming and lets the match in hand finish inside cron.shutdown_timeout_secs.",
+  "description": "Claim ONE queued row on this replica's engine digest and play it: observe, one `model_infer` per live seat, step, until the engine stops returning views. A seat whose model declares an output named `memory` or `ant_memory` is handed that output of its last answered call back on its next view, under the same key: absent on turn 0, kept through a struck turn, never shared between seats, and gone with the match. A model that declares neither plays exactly as before. The row is finished in place, with its replay under a key naming the attempt. Every statement is conditioned on the claim token, so a stale attempt updates nothing. It reads no rating and writes no rating, and its database role cannot reach one. In `api` mode every statement is a call to Soma's runner gate (/v1/runner/*). On SIGTERM Orion stops claiming and lets the match in hand finish inside cron.shutdown_timeout_secs.",
   "tags": ["kalam", "clock", "matches"],
   "condition": true,
   "loop": { "counter": "i", "max": 1010 },
@@ -500,6 +500,22 @@
                       { "val": ["temp_data", "obs", "views", 0, "view", "size", 0] },
                       { "val": ["temp_data", "obs", "views", 0, "view", "size", 1] }
                     ]
+                  }
+                },
+                {
+                  "$each": { "seat": { "$from": "constants.seats" } },
+                  "do": {
+                    "path": "temp_data.v{{seat}}.memory",
+                    "logic": { "var": "data.mem{{seat}}" },
+                    "on_null": "unset"
+                  }
+                },
+                {
+                  "$each": { "seat": { "$from": "constants.seats" } },
+                  "do": {
+                    "path": "temp_data.v{{seat}}.ant_memory",
+                    "logic": { "var": "data.amem{{seat}}" },
+                    "on_null": "unset"
                   }
                 },
                 {
@@ -1124,7 +1140,30 @@
                     ]
                   }
                 },
-                { "path": "temp_data.idx", "unset": true }
+                { "path": "temp_data.idx", "unset": true },
+                {
+                  "$each": { "seat": { "$from": "constants.seats" } },
+                  "do": {
+                    "path": "data.mem{{seat}}",
+                    "logic": {
+                      "??": [{ "var": "temp_data.p{{seat}}.memory" }, { "var": "data.mem{{seat}}" }]
+                    },
+                    "on_null": "unset"
+                  }
+                },
+                {
+                  "$each": { "seat": { "$from": "constants.seats" } },
+                  "do": {
+                    "path": "data.amem{{seat}}",
+                    "logic": {
+                      "??": [
+                        { "var": "temp_data.p{{seat}}.ant_memory" },
+                        { "var": "data.amem{{seat}}" }
+                      ]
+                    },
+                    "on_null": "unset"
+                  }
+                }
               ]
             }
           }
