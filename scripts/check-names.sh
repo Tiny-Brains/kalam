@@ -17,7 +17,7 @@ PACKAGE = json.loads(pathlib.Path("shared/package.json").read_text())["package"]
 SURFACES = ("clock",)   # every channel here is a cron; the gate is Soma's side of the call
 CONN = "conn"
 DOMAINS = {"platform", "auth", "profile", "notifications", "seasons", "maps", "baselines",
-           "ladder", "matches", "models", "admission", "runners", "users"}
+           "ladder", "matches", "models", "admission", "runners", "users", "community"}
 
 errors = []
 def bad(p, msg): errors.append(f"{p}: {msg}")
