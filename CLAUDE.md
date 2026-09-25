@@ -51,6 +51,11 @@ identically, not just recorded.
 - **A gate route's request field names are the contract**, not the column names. `finish` binds `data.req.result` and `data.req.engine_digest`. Send other names
   and the route binds nulls and answers `409 claim_lost`. Run `grep data.req.` in the route before
   changing a request body here.
+- **`frame` fails quietly, so its name is checked by hand.** `finish` sends
+  `temp_data.last.frame`, the viewer's frame at the last turn from `tb.ants.replay-decode`, and
+  Soma's `finish` binds `data.req.frame`. A renamed field or path sends null, Soma stores no frame,
+  and every card rests on turn zero with nothing failing. The task decodes the replay envelope's
+  `map`, `seed`, `max_turns` and `deltas`, so a change to what `put` writes is a change here too.
 - **The renew's two failures differ in `api` mode** (`RENEW_LOST`). `applied: false` means the claim
   is gone, so halt. A call that never arrived means almost nothing, so play on: the lease outlasts
   the renew interval, and a lost claim is refused at finish. Don't collapse them.

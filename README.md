@@ -4,7 +4,7 @@ Kalam is the TinyBrains match runner. It is an Orion 1.9.1 package (cron channel
 connectors) shipped inside a runnable image, `ghcr.io/tiny-brains/kalam`: orion-server,
 the package, and the Ants engine from one ants release. A runner claims queued matches through
 [Soma](https://github.com/Tiny-Brains/soma)'s runner gate, plays them turn by turn on Orion's own
-model runtime, and posts the result and the replay back. The same image in its other role, an
+model runtime, and posts the result, the replay and the match's last frame back. The same image in its other role, an
 **admitting runner** (`RUNNER_ROLE=admit`), admits submissions: Soma runs no model, so every
 submission is registered, admitted and played over the game's reference observations on one of
 these, and Soma judges the report. Either way it holds no database credential and binds no public
@@ -173,7 +173,8 @@ That file never builds, never lets `RUNNER_ALLOW_PRIVATE_URLS` through, runs Ori
 - **The state database is in memory.** Both compose files mount a 64 MiB tmpfs at
   `/var/lib/orion/state`, so a restart starts clean and a crash leaves nothing holding a match slot.
   Run records are kept an hour and Orion's audit log a day.
-- **Bandwidth is small and bursty.** One replay PUT per match (about 58 KiB for a 549-turn match),
+- **Bandwidth is small and bursty.** One replay PUT per match (about 58 KiB for a 549-turn match)
+  and the last frame in the finish call (about 7 KiB on the largest basic board),
   one artifact GET per cache miss (at most 64 MiB, `max_artifact_bytes`), and the idle poll: a token
   exchange and a claim per lane every 5 s.
 - **No inbound ports.** 8080 is published on loopback only (`RUNNER_ADMIN_PORT`), for `/health` and
@@ -342,6 +343,11 @@ plugins/tb-ants/               optional local engine for lint (gitignored)
   `claim_token`, so a runner whose lease was reaped writes nothing. The replay key names the attempt
   (`<replay_prefix>/<match>/<claim_token>.json`), so a stale attempt's blob is an orphan, not a
   replacement.
+- **The last frame never fails a match.** After the loop, `frame` decodes the replay once through
+  the engine's own `replay-decode` (about 0.3 s for 1000 turns on the largest basic board) and
+  `finish` sends it opaque as `frame`, for the card that shows the match. The task is
+  `continue_on_error`: a refusal sends no frame, Soma skips one over 64 KB, and the match finishes
+  and rates either way.
 - **The engine digest decides what is claimed.** It is derived from the component in the image and
   must equal `games.active_engine_digest`. A mismatch claims nothing, silently.
 - **One Orion state per runner, never cluster mode.** Each lane's `forbid` key is local. Shared state

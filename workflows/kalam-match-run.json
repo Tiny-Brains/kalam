@@ -1618,6 +1618,24 @@
               ]
             }
           }
+        },
+        {
+          "id": "frame",
+          "name": "The last frame, for the card that shows this match",
+          "continue_on_error": true,
+          "function": {
+            "name": "tb.ants.replay-decode",
+            "input": {
+              "payload": {
+                "map": { "var": "temp_data.res.map" },
+                "seed": { "var": "data.row.seed" },
+                "max_turns": { "var": "data.ct.max_turns" },
+                "deltas": { "var": "data.deltas" }
+              },
+              "turn": { "var": "temp_data.res.turns" },
+              "output": "temp_data.last"
+            }
+          }
         }
       ]
     },
@@ -1715,7 +1733,8 @@
             "opened_at": { "var": "data.opened_at" },
             "engine_digest": { "var": "metadata.vars.engine_digest" },
             "orion_version": { "var": "metadata.vars.orion_version" },
-            "replay_key": { "var": "temp_data.signed.key" }
+            "replay_key": { "var": "temp_data.signed.key" },
+            "frame": { "var": "temp_data.last.frame" }
           },
           "output": "temp_data.wrote"
         }
