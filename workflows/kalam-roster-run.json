@@ -1,67 +1,52 @@
 {
   "workflow_id": "kalam-roster-run",
   "name": "Kalam: reconcile this node's model set",
-  "description": "Every version the ladder says is verified or active, registered, admitted and activated ON THIS NODE. Models are a state-database entity and each replica is its own Orion with its own state database, so a roster is per node -- and a clock that reconciles from the shared schema needs no replica list anywhere, which is what keeps any clock from ever calling a replica. One step per item per tick: registration queues admission, and a later tick activates what passed. Nothing here writes to the platform schema; its database role has SELECT and nothing else on model_versions.",
+  "description": "Every version the ladder says is verified or active, registered, admitted and activated ON THIS NODE. Models are a state-database entity and each replica is its own Orion with its own state database, so a roster is per node -- and a clock that reconciles from Soma's gate (`GET /v1/runner/roster`, which is also the liveness check) needs no replica list anywhere, which is what keeps any clock from ever calling a replica. One step per item per tick: registration queues admission, and a later tick activates what passed. Nothing here writes to the platform schema; the runner holds no database credential.",
   "tags": ["kalam", "clock", "models"],
   "condition": true,
-  "loop": { "counter": "i", "max": 256 },
-  "tasks": [
-    {
-      "id": "when_roster",
-      "condition": { "==": [{ "var": "temp_data.i" }, 0] },
-      "tasks": [
-        {
-          "id": "rauth",
-          "name": "Exchange the runner key for a token",
-          "continue_on_error": true,
-          "function": { "name": "http_call", "input": { "$from": "constants.runner_token_call" } }
-        },
-        {
-          "id": "roster",
-          "name": "What the ladder says this node should be able to play",
-          "continue_on_error": true,
-          "function": {
-            "name": "http_call",
-            "input": {
-              "connector": "kalam-api",
-              "method": "GET",
-              "path": "/v1/runner/roster",
-              "headers": { "Authorization": { "cat": ["Bearer ", { "var": "data.tok.token" }] } },
-              "output": "data.rb"
-            }
+  "loop": {
+    "counter": "i",
+    "max": 4096,
+    "over": { "or": [{ "var": "data.rb.items" }, []] },
+    "as": "it",
+    "scratch": "s",
+    "setup": [
+      {
+        "id": "rauth",
+        "use": "token"
+      },
+      {
+        "id": "roster",
+        "name": "What the ladder says this node should be able to play",
+        "continue_on_error": true,
+        "function": {
+          "name": "http_call",
+          "input": {
+            "connector": "kalam-api",
+            "method": "GET",
+            "path": "/v1/runner/roster",
+            "headers": { "Authorization": { "cat": ["Bearer ", { "var": "data.tok.token" }] } },
+            "output": "data.rb"
           }
         }
-      ]
-    },
-    {
-      "id": "more",
-      "name": "Stop when the roster runs out",
-      "function": {
-        "name": "filter",
-        "input": {
-          "condition": { "<": [{ "var": "temp_data.i" }, { "var": "data.rb.n" }] },
-          "on_reject": "halt"
+      },
+      {
+        "id": "overflow",
+        "name": "Warn when the roster outgrows the loop",
+        "description": "The loop's max is the ceiling on how many versions this node registers in one tick, and the roster query has no LIMIT: past it the loop ends as a normal completion and the versions after it are never registered here, so every match they are paired into is released by this node for ever. A warn line is the only signal, since a cron occurrence's data returns nowhere; raise the loop's max (under [engine] max_loop_iterations) when it fires.",
+        "condition": { ">": [{ "var": "data.rb.n" }, 4096] },
+        "function": {
+          "name": "log",
+          "input": {
+            "message": "kalam-roster: the roster is larger than this loop registers in one tick",
+            "level": "warn",
+            "fields": { "roster": { "var": "data.rb.n" }, "loop_max": 4096 }
+          }
         }
       }
-    },
-    {
-      "id": "item",
-      "name": "Take version i, and clear the last one",
-      "function": {
-        "name": "map",
-        "input": {
-          "mappings": [
-            {
-              "path": "temp_data.it",
-              "logic": { "val": ["data", "rb", "items", { "val": ["temp_data", "i"] }] }
-            },
-            { "path": "temp_data.have", "unset": true },
-            { "path": "temp_data.made", "unset": true },
-            { "path": "temp_data.activated", "unset": true }
-          ]
-        }
-      }
-    },
+    ]
+  },
+  "tasks": [
     {
       "id": "have",
       "name": "Does this node know it already?",
@@ -72,14 +57,14 @@
           "connector": "kalam-orion",
           "method": "GET",
           "path": { "cat": ["/models/", { "var": "temp_data.it.model" }] },
-          "output": "temp_data.have"
+          "output": "temp_data.s.have"
         }
       }
     },
     {
       "id": "register",
       "name": "Register it here",
-      "condition": { "!": { "var": "temp_data.have.data.model_id" } },
+      "condition": { "!": { "var": "temp_data.s.have.data.model_id" } },
       "continue_on_error": true,
       "function": {
         "name": "http_call",
@@ -96,7 +81,7 @@
             },
             "tags": ["ladder"]
           },
-          "output": "temp_data.made"
+          "output": "temp_data.s.made"
         }
       }
     },
@@ -105,8 +90,8 @@
       "name": "Activate what has passed",
       "condition": {
         "and": [
-          { "===": [{ "var": "temp_data.have.data.admission.state" }, "passed"] },
-          { "!==": [{ "var": "temp_data.have.data.status" }, "active"] }
+          { "===": [{ "var": "temp_data.s.have.data.admission.state" }, "passed"] },
+          { "!==": [{ "var": "temp_data.s.have.data.status" }, "active"] }
         ]
       },
       "continue_on_error": true,
@@ -117,7 +102,7 @@
           "method": "PATCH",
           "path": { "cat": ["/models/", { "var": "temp_data.it.model" }, "/status"] },
           "body": { "status": "active" },
-          "output": "temp_data.activated"
+          "output": "temp_data.s.activated"
         }
       }
     }

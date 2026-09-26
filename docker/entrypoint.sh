@@ -88,7 +88,9 @@ esac
 if [ "$KALAM_ROLE" = admit ]; then
   KALAM_MATCH_LANES=0
   KALAM_CRON_WORKERS=1
-  KALAM_SEAT_CONCURRENCY=
+  # One, not empty: the template's `${KALAM_SEAT_CONCURRENCY:-1}` falls back only when the variable
+  # is UNSET, and an admitting runner asks one inference a sweep in any case.
+  KALAM_SEAT_CONCURRENCY=1
   echo "==> an admitting runner: the kalam-admit channel, 1 cron worker, no match lanes"
 else
   lanes="${RUNNER_CRON_WORKERS:-2}"
@@ -131,8 +133,8 @@ else
 fi
 export KALAM_ROLE KALAM_MATCH_LANES KALAM_CRON_WORKERS KALAM_SEAT_CONCURRENCY
 
-echo "==> migrating state"
-orion-server -c "$CFG" migrate --wait 30s > /dev/null
+# No `migrate` step: [storage] auto_migrate is on in runner.toml.tmpl, so the server migrates its
+# own state database at boot, and SQLite ignores --wait.
 
 # ---------------------------------------------------------------- the package for this node
 # WHAT A NODE SHAPES, AND IT IS NOT AUTHORING. The package in this image is complete and authored:

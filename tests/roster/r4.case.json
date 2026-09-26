@@ -1,0 +1,41 @@
+{
+  "name": "R4: an empty roster ends the run after the read",
+  "workflow": "../../workflows/kalam-roster-run.json",
+  "input": {},
+  "metadata": {
+    "vars": {
+      "engine_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "orion_version": "1.10.0",
+      "runner_key": "k",
+      "runner_label": "h",
+      "arch": "arm64",
+      "node_version": "dev",
+      "match_slots": 2,
+      "ops_budget": 1000000,
+      "match_timeout_ms": 2400000,
+      "seat_concurrency": 2,
+      "models_bucket_connector": "kalam-models"
+    },
+    "trigger": {
+      "scheduled_for": "2026-09-26T03:00:00Z",
+      "attempt": 1,
+      "occurrence_id": "01a0db56-0000-7000-8000-000000000001",
+      "singleton_slot": 0
+    }
+  },
+  "stubs": {
+    "http_call": {
+      "kalam-api": { "token": "tok", "n": 0, "items": [] },
+      "kalam-orion": { "data": {} },
+      "kalam-blobs-put": ""
+    },
+    "cache_read": { "kalam-cache": null },
+    "cache_write": { "kalam-cache": {} },
+    "cache_delete": { "kalam-cache": { "deleted": 1 } }
+  },
+  "expect": { "data.rb.n": 0 },
+  "expect_calls": {
+    "http_call": [{ "path": "/v1/runner/token" }, { "path": "/v1/runner/roster" }]
+  },
+  "expect_tasks": ["rauth.read", "rauth.mint", "rauth.keep", "roster"]
+}

@@ -1,0 +1,142 @@
+{
+  "name": "R3: a version that passed admission but is not active is activated",
+  "workflow": "../../workflows/kalam-roster-run.json",
+  "input": {},
+  "metadata": {
+    "vars": {
+      "engine_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "orion_version": "1.10.0",
+      "runner_key": "k",
+      "runner_label": "h",
+      "arch": "arm64",
+      "node_version": "dev",
+      "match_slots": 2,
+      "ops_budget": 1000000,
+      "match_timeout_ms": 2400000,
+      "seat_concurrency": 2,
+      "models_bucket_connector": "kalam-models"
+    },
+    "trigger": {
+      "scheduled_for": "2026-09-26T03:00:00Z",
+      "attempt": 1,
+      "occurrence_id": "01a0db56-0000-7000-8000-000000000001",
+      "singleton_slot": 0
+    }
+  },
+  "stubs": {
+    "http_call": {
+      "kalam-api": {
+        "token": "tok",
+        "n": 1,
+        "items": [
+          {
+            "model": "tb.nano-bc",
+            "version_id": "v-1",
+            "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "key": "models/v-1/model.onnx",
+            "manifest": {
+              "abi": "orion:model@1.0.0",
+              "description": "A TinyBrains Ants entry: seven planes in, a per-cell policy out.",
+              "format": "onnx",
+              "inputs": [
+                {
+                  "adapter": {
+                    "reshape": [
+                      {
+                        "stack": [
+                          [
+                            { "scatter": [{ "var": "mine" }, { "var": "size" }, "i8"] },
+                            {
+                              "scatter": [
+                                {
+                                  "map": [
+                                    { "var": "foes" },
+                                    [{ "var": "0" }, { "var": "1" }]
+                                  ]
+                                },
+                                { "var": "size" },
+                                "i8"
+                              ]
+                            },
+                            { "scatter": [{ "var": "food" }, { "var": "size" }, "i8"] },
+                            { "rle_expand": [{ "var": "water.rle" }, { "var": "size" }, "i8"] },
+                            {
+                              "scatter": [
+                                {
+                                  "map": [
+                                    {
+                                      "filter": [
+                                        { "var": "hills" },
+                                        { "==": [{ "var": "2" }, 0] }
+                                      ]
+                                    },
+                                    [{ "var": "0" }, { "var": "1" }]
+                                  ]
+                                },
+                                { "var": "size" },
+                                "i8"
+                              ]
+                            },
+                            {
+                              "scatter": [
+                                {
+                                  "map": [
+                                    {
+                                      "filter": [
+                                        { "var": "hills" },
+                                        { "!=": [{ "var": "2" }, 0] }
+                                      ]
+                                    },
+                                    [{ "var": "0" }, { "var": "1" }]
+                                  ]
+                                },
+                                { "var": "size" },
+                                "i8"
+                              ]
+                            },
+                            { "rle_expand": [{ "var": "vis.rle" }, { "var": "size" }, "i8"] }
+                          ],
+                          0
+                        ]
+                      },
+                      { "merge": [[1, 7], { "var": "size" }] }
+                    ]
+                  },
+                  "dtype": "i8",
+                  "name": "board",
+                  "shape": [1, 7, "H", "W"]
+                }
+              ],
+              "name": "tb.nano-bc",
+              "outputs": [{ "dtype": "f32", "name": "policy", "shape": [1, 5, "H", "W"] }],
+              "probe_dims": { "H": 128, "W": 128 },
+              "version": "1"
+            },
+            "status": "verified"
+          }
+        ]
+      },
+      "kalam-orion": {
+        "data": {
+          "model_id": "tb.nano-bc",
+          "status": "inactive",
+          "admission": { "state": "passed" }
+        }
+      },
+      "kalam-blobs-put": ""
+    },
+    "cache_read": { "kalam-cache": null },
+    "cache_write": { "kalam-cache": {} },
+    "cache_delete": { "kalam-cache": { "deleted": 1 } }
+  },
+  "expect": { "data.rb.n": 1 },
+  "expect_calls": {
+    "http_call": [
+      { "path": "/v1/runner/token" },
+      { "path": "/v1/runner/roster" },
+      { "path": "/models/tb.nano-bc" },
+      { "path": "/models/tb.nano-bc/status", "body": { "status": "active" } }
+    ]
+  },
+  "expect_tasks": ["rauth.read", "rauth.mint", "rauth.keep", "roster", "have", "activate"]
+}

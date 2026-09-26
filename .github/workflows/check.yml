@@ -1,0 +1,57 @@
+# EVERY PUSH AND PULL REQUEST RUNS scripts/check-defs.sh: lint, clippy, fmt, the names and tags,
+# the offline cases, and clippy against the shipped runner template. No image is built here; that
+# is release.yml, on a version tag.
+#
+# What the checks need that the repository does not carry: orion-server at the version
+# shared/package.json requires, the cartridge (plugins/tb-ants, from the ants release the way the
+# Dockerfile takes it, or the repository variable ANTS_RELEASE to pin one), and the starter's
+# nano-bc bytes for the two test models (cloned from Tiny-Brains/ants-starter, the one repository
+# that commits a model).
+
+name: check
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: orion-server, at the version the package requires
+        run: |
+          set -eu
+          range=$(python3 -c "import json; print(json.load(open('shared/package.json'))['package']['requires']['orion'])")
+          version=$(echo "$range" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+          echo "package requires orion $range; installing $version"
+          curl -fsSL --retry 5 -o orion.tar.xz \
+            "https://github.com/GoPlasmatic/Orion/releases/download/v${version}/orion-server-aarch64-unknown-linux-gnu.tar.xz"
+          curl -fsSL --retry 5 -o orion.sha256 \
+            "https://github.com/GoPlasmatic/Orion/releases/download/v${version}/orion-server-aarch64-unknown-linux-gnu.tar.xz.sha256"
+          echo "$(cut -d' ' -f1 orion.sha256)  orion.tar.xz" | sha256sum -c -
+          mkdir -p "$HOME/.local/bin" && tar -xJf orion.tar.xz --strip-components=1 -C "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/orion-server" --version
+
+      - name: The cartridge, from the ants release
+        env:
+          PIN: ${{ vars.ANTS_RELEASE }}
+        run: |
+          set -eu
+          url="https://github.com/Tiny-Brains/ants/releases/${PIN:+download/}${PIN:-latest/download}/ants-artifacts.tar.gz"
+          curl -fsSL --connect-timeout 20 --retry 5 --retry-all-errors -o ants.tar.gz "$url"
+          mkdir -p artifacts plugins/tb-ants && tar -xzf ants.tar.gz -C artifacts
+          cp artifacts/tb-ants.wasm artifacts/plugin.json artifacts/cartridge.json artifacts/plugin.toml plugins/tb-ants/
+          echo "ants ${PIN:-latest}: engine sha256:$(sha256sum plugins/tb-ants/tb-ants.wasm | cut -d' ' -f1)"
+
+      - name: The starter's model bytes, for the two test models
+        run: git clone --depth 1 https://github.com/Tiny-Brains/ants-starter ../ants-starter
+
+      - name: check-defs
+        run: ./scripts/check-defs.sh

@@ -79,8 +79,8 @@ else
   trap 'rm -rf "$SET"; rm -f "$ARTIFACT"' EXIT
 fi
 mkdir -p "$SET"
-cp -R . "$SET"/
-rm -rf "$SET/scripts" "$SET/docker"
+# The definition set and nothing else: on an operator's machine `.` also holds .env files and keys/.
+for d in channels workflows connectors shared plugins; do [ -d "$d" ] && cp -R "$d" "$SET"/; done
 
 echo "==> shaping the package for a $ROLE runner"
 if [ "$ROLE" = admit ]; then

@@ -7,12 +7,18 @@
   "loop": {
     "counter": "k",
     "max": 1024,
+    "over": {
+      "merge": [
+        { "if": [{ "var": "data.probing" }, { "var": "data.job.admission.observations" }, []] },
+        [{}]
+      ]
+    },
+    "as": "obs",
+    "scratch": "r",
     "setup": [
       {
         "id": "aauth",
-        "name": "Exchange the runner key for a token",
-        "continue_on_error": true,
-        "function": { "name": "http_call", "input": { "$from": "constants.runner_token_call" } }
+        "use": "token"
       },
       {
         "id": "aclaim",
@@ -204,15 +210,7 @@
           }
         }
       }
-    ],
-    "over": {
-      "merge": [
-        { "if": [{ "var": "data.probing" }, { "var": "data.job.admission.observations" }, []] },
-        [{}]
-      ]
-    },
-    "as": "obs",
-    "scratch": "r"
+    ]
   },
   "tasks": [
     {
@@ -524,6 +522,28 @@
                 "probe": { "if": [{ "var": "data.probing" }, { "var": "temp_data.probe" }, null] }
               },
               "output": "temp_data.reported"
+            }
+          }
+        },
+        {
+          "id": "log_report",
+          "name": "One line for the walk",
+          "description": "A cron occurrence's data returns nowhere and a successful run keeps no trace, so this line is the node's only record of an admission it walked: what it admitted, how many observations it played, and whether Soma took the report (a null `reported` is a report that never arrived, which sends the submission back to the queue).",
+          "function": {
+            "name": "log",
+            "input": {
+              "message": "kalam-admit: walk ended",
+              "level": "info",
+              "fields": {
+                "version_id": { "var": "data.job.admission.version_id" },
+                "model": { "var": "data.job.admission.model" },
+                "probing": { "var": "data.probing" },
+                "checked": { "var": "data.checked" },
+                "errored": { "var": "data.errored" },
+                "ok": { "var": "data.ok" },
+                "reason": { "var": "data.reason" },
+                "reported": { "!!": { "var": "temp_data.reported" } }
+              }
             }
           }
         }

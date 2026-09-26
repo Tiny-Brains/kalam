@@ -8,6 +8,7 @@
     "url": "env://KALAM_API_URL",
     "headers": { "content-type": "application/json", "user-agent": "kalam-runner" },
     "retry": { "max_retries": 3, "retry_delay_ms": 500 },
+    "retry_non_idempotent": true,
     "timeout_ms": 15000,
     "allow_private_urls": "var://allow_private_urls"
   }

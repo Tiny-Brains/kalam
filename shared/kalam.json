@@ -26,10 +26,69 @@
             { "var": "metadata.vars.match_slots" },
             null
           ]
-        }
+        },
+        "ops_budget": { "var": "metadata.vars.ops_budget" },
+        "match_timeout_ms": { "var": "metadata.vars.match_timeout_ms" },
+        "seat_concurrency": { "var": "metadata.vars.seat_concurrency" }
       },
       "output": "data.tok"
     },
     "seats": [0, 1, 2, 3, 4, 5, 6, 7]
+  },
+  "fragments": {
+    "token": {
+      "tasks": [
+        {
+          "id": "read",
+          "name": "The token this node already holds",
+          "function": {
+            "name": "cache_read",
+            "input": {
+              "connector": "kalam-cache",
+              "key": "runner_token",
+              "output": "temp_data.tokc"
+            }
+          }
+        },
+        {
+          "id": "hit",
+          "name": "Use the cached token",
+          "condition": { "!!": { "var": "temp_data.tokc.token" } },
+          "function": {
+            "name": "map",
+            "input": { "mappings": [{ "path": "data.tok", "logic": { "var": "temp_data.tokc" } }] }
+          }
+        },
+        {
+          "id": "mint",
+          "name": "Exchange the key for a token",
+          "description": "Only on a miss: a token lives ten minutes and the cache keeps it eight, so a run never plays on a token about to expire. Soft, so a refused or unreachable exchange leaves data.tok.token unset and the run ends at its noauth.",
+          "condition": { "!": { "var": "temp_data.tokc.token" } },
+          "continue_on_error": true,
+          "function": { "name": "http_call", "input": { "$from": "constants.runner_token_call" } }
+        },
+        {
+          "id": "keep",
+          "name": "Keep a token this run minted",
+          "description": "Only a minted token is written, with its 480 s of the 600: a hit must not rewrite the entry, or its TTL would restart on every run and a token could stay cached past its life.",
+          "condition": {
+            "and": [
+              { "!": { "var": "temp_data.tokc.token" } },
+              { "!!": { "var": "data.tok.token" } }
+            ]
+          },
+          "continue_on_error": true,
+          "function": {
+            "name": "cache_write",
+            "input": {
+              "connector": "kalam-cache",
+              "key": "runner_token",
+              "value": { "var": "data.tok" },
+              "ttl_secs": 480
+            }
+          }
+        }
+      ]
+    }
   }
 }

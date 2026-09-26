@@ -1,0 +1,13 @@
+{
+  "abi": "orion:model@1.0.0",
+  "description": "nano-bc with an adapter that yields a JSON list where the board tensor is declared: every call is refused as caller_input, which is how a test strikes a seat on every turn.",
+  "format": "onnx",
+  "inputs": [
+    { "adapter": { "var": "mine" }, "dtype": "i8", "name": "board", "shape": [1, 7, "H", "W"] }
+  ],
+  "name": "tb.nano-bad",
+  "outputs": [{ "dtype": "f32", "name": "policy", "shape": [1, 5, "H", "W"] }],
+  "probe_dims": { "H": 128, "W": 128 },
+  "version": "1",
+  "artifact": "model.onnx"
+}

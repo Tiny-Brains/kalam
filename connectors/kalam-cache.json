@@ -1,0 +1,8 @@
+{
+  "id": "kalam-cache",
+  "name": "kalam-cache",
+  "connector_type": "cache",
+  "tags": ["kalam", "conn", "platform"],
+  "config": { "type": "cache", "backend": "memory" },
+  "description": "This node's in-process memory, for the runner token: a run is a fresh execution carrying no state, so without it every cron run minted a ten-minute credential and used it once (0.89 exchanges/s per idle runner). Memory, not Redis: a runner shares no state with any peer, and this cache opens no socket."
+}

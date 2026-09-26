@@ -45,6 +45,13 @@ orion-server fmt --check .
 echo "==> names and tags"
 ./scripts/check-names.sh
 
+# ---------------------------------------------------------------- the offline cases
+# Every *.case.json under tests/, through `orion-server test`: the gate stubbed, the engine and the
+# models real. Lint proves the set resolves; this is what proves a lost lease halts, a struck seat
+# forfeits, a missing version is registered. Since Orion 1.10.0 a case runs at a node's cost.
+echo "==> offline test cases"
+./scripts/check-tests.sh
+
 # ---------------------------------------------------------------- the serving config's rules
 # Three clippy rules need the config this node will actually serve with, because what they prove is
 # a definition against a setting: a `[vars]` name nothing declares, a `secret` nothing supplies, and
@@ -57,7 +64,7 @@ echo "==> names and tags"
 # image copies. It used to run against replica-db.toml.tmpl, whose `[vars]` was a superset, because
 # the package carried a `db`-mode branch reading `lease_seconds`, `turn_ms`, `model_prefix` and the
 # rest of the execution contract. That branch is gone -- the contract rides the claim -- so the set
-# reads exactly the seven vars a runner declares, and the two-template coupling went with it.
+# reads exactly the ten vars a runner declares, and the two-template coupling went with it.
 #
 # STAND-IN VALUES FOR WHAT THE TEMPLATE REQUIRES: `${NAME:?message}` stops a boot when the variable
 # is unset or empty, which is what it is for; this is a static check, not a boot, so it supplies

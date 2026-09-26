@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-`kalam` ships **no server code**. It is an Orion **1.9.1** package, which the orion-server in its
+`kalam` ships **no server code**. It is an Orion **1.10.0** package, which the orion-server in its
 runner image applies to itself at boot (`[packages] apply`). It has three clocks. **`kalam-match`** is
 ONE channel whose `concurrency.slots` is how many matches this node plays at once, each run of
 `kalam-match-run`: claim ONE queued row, then `observe` → one `model_infer` fanned out over the
@@ -44,10 +44,22 @@ identically, not just recorded.
   the row arrived. There was a second, `db` path until the statements were deleted; the gate's are
   the only copy now, and `soma/scripts/verify/run.sh` reads each one out of the workflow that ships
   it, so no second copy can drift.
+- **A token is minted once per eight minutes per node, not once per run.** The `token` fragment
+  (`shared/kalam.json`) reads `runner_token` from `kalam-cache`, this node's in-process memory,
+  mints only on a miss and keeps a fresh one for 480 s of its 600; a claim that fails outright
+  drops it (`forget`), so a revoked key is refused with a message on the next poll rather than
+  retried on a cached token. `reauth` mid-match reads the same cache, so a renew mints only when the
+  entry has expired; a hit never rewrites the entry, or its TTL would restart on every run. The
+  cache is memory, never Redis: a runner shares no state with a peer.
 - **The runner's capacity is reported, not configured on Soma.** Every token exchange sends
   `max_in_flight` = `[vars] match_slots` (the entrypoint's RUNNER_CRON_WORKERS), and Soma's register
   stores it on the runner's row, which caps how many matches the claim hands this runner. An
-  admitting runner sends `null`, which leaves its row alone.
+  admitting runner sends `null`, which leaves its row alone. It also sends `match_timeout_ms` (the
+  match channel's `timeout_ms`, typed once more under `[vars]`; configs.sh keeps them equal) and
+  `seat_concurrency`, and Soma's claim hands this runner only a row whose turn_ms × max_turns × seat
+  batches, plus a tenth, fit inside that timeout: a match a node cannot finish is never claimed,
+  reaped and re-claimed for ever, it waits pending. Raise the channel's timeout and the shutdown
+  bounds together when a season needs longer matches.
 - **A gate route's request field names are the contract**, not the column names. `finish` binds `data.req.result` and `data.req.engine_digest`. Send other names
   and the route binds nulls and answers `409 claim_lost`. Run `grep data.req.` in the route before
   changing a request body here.
@@ -142,6 +154,20 @@ identically, not just recorded.
   `ant_memory` are the runner's, and ants' engine test asserts it never emits either. The value is
   the raw output tensor; `cli/src/wave.rs` carries the same keys under the same rules, and `conform`
   fails on the first memory match where they differ.
+- **The match loop is `setup`, then one turn per sweep, in a `scratch`.** `loop.setup` holds
+  everything that happens once: the vars, the token, the claim and its `open`, the seats' `has`
+  and its barrier, `start`, `worldgen` and `init`; a `terminal` (`noauth`, `idle`, `unready`) or
+  a halting filter (`vars`, `started`) there ends the run before any sweep. The body is one turn,
+  and every per-turn slot (the views, the inferences, the decoded actions, the step, the renew, the
+  finish) is under `temp_data.t`, which `scratch` resets before each sweep -- so a read of a
+  per-turn slot at `temp_data.x` is null, and that includes the scoped reads inside a `reduce`
+  body, `{"val": [[1], "temp_data", "t", "w"]}`. What a sweep hands to the next lives in
+  `data` (the state, the deltas, the refs, the memory carry) or outside the scratch field (the
+  counter `temp_data.i`, the token cache's `temp_data.tokc`); the engine's own element bindings
+  (`temp_data.sv` for `infer`, `temp_data.st` for `has`) are not slots. `stop` is the terminator:
+  the counter's `max` is a bound. The roster loop iterates the roster itself (`over`, `as: "it"`,
+  `scratch: "s"`), so its bound is the array or `max`, whichever ends first, and an empty or
+  failed roster read runs no sweep.
 - **The admission probe is a loop, because a `for_each` cannot chain.** Every `for_each` element
   runs on a copy taken before the first call, so no element sees another's output.
   `kalam-admit-run` is a workflow loop: the claim, the registration and the admission are its
@@ -170,7 +196,13 @@ identically, not just recorded.
 - **Never put a runner in cluster mode or shared state.** The `forbid` keys are local because each
   runner has its own SQLite, which lives on a tmpfs (`/var/lib/orion/state`) and is gone on every
   start: a crash's `running` occurrences must not hold the match slots after it. Shared state makes each lane a fleet-wide singleton, which looks exactly
-  like idle capacity.
+  like idle capacity. Since Orion 1.10.0 a running attempt holds its slot for one `claim_lease_secs`
+  at a time and a peer recovers a dead node's slots a lease later, and `orion-cli cron cancel <id>`
+  frees one at once; a runner has no peer, so the tmpfs is still what makes a restart start clean.
+  The one outage that reaches a runner's state database is a full tmpfs (64 MiB; an errors-only
+  trace can be a megabyte, and an occurrence row lands every 5 s per lane): after 45 s without a
+  renewal every in-flight match on the node cancels itself, is reaped by Soma a lease later and
+  claimed elsewhere. Watch the tmpfs, not a knob.
 
 ## Gotchas
 
@@ -206,6 +238,10 @@ Orion:
 - **Every admin API reply is wrapped in `{"data": …}`.** The barrier reads
   `temp_data.m0.data.status`. If it read `temp_data.m0.status` instead, `null` would never equal
   `"active"`, and every match would be released for ever with both sides looking healthy.
+- **An HTTP non-2xx from the gate, the buckets or this node's admin API is a task error**, which
+  halts the run unless the task is `continue_on_error`; every gate and admin call here is soft for
+  that reason, and each barrier reads a fate field off an output that stays unset on failure. `put`
+  is deliberately hard: Soma's `matches` shape requires a `replay_key` for a finished row.
 - **`{"now": []}` returns an ISO-8601 instant.** `played_ms` is computed in Postgres from it.
 - **A cron occurrence's `data` is unreadable**: it returns nowhere, and a trace carries no per-task
   detail (and is dropped above `trace_queue.max_result_size_bytes`). A failing run can be diagnosed
@@ -217,13 +253,16 @@ Orion:
   grows with its turns, by gigabytes.
 - **A `for_each` element runs on a deep copy of the message** (tensors are shared, nothing else), so
   `max_concurrency` copies are alive at once, and every write in a copy is captured whatever the run
-  says — the fold drops them again when capture is off. `orion-server test` and `dry-run` run with
-  capture on and a per-step trace, so a long match there costs tens of GB that a node never spends:
-  test a match offline in tens of turns, not a thousand, and an admission in tens of
-  observations: `kalam-admit-run` is a loop too, and 64 observations there take about 9 GB.
-- **Orion's static analysis does not read `for_each.into` or `for_each.over`** as a write or a read.
-  `perf.redundant_step_condition` can then propose a group that is wrong, and `clippy --fix` would
-  apply it: check what reads an `into` path before accepting one.
+  says — the fold drops them again when capture is off. Since Orion 1.10.0 `orion-server test`
+  runs a case as a node runs an untraced message (no trace and no capture, unless an `expect` is
+  rooted at `audit_trail`), so a 1000-turn match or a 64-observation admission costs offline about
+  what it costs a node. `dry-run` still snapshots every step by default: give a long loop
+  `--trace steps` or `--trace none`.
+- **`clippy`, `fmt` and every walk read `loop.setup`, `loop.over` and `for_each` since 1.10.0.**
+  `for_each.over` and `loop.over` are reads, `collect` and `into` are writes, and a key `loop` or
+  `for_each` does not define is refused as `UNKNOWN_FIELD` rather than ignored (a misspelt
+  `max_concurency` used to run one call at a time in silence). `fmt` puts `for_each` before
+  `function`.
 - **Loop bounds.** `kalam-match-run` loops at most `MATCH_LOOP_MAX` (1010) sweeps: one per turn plus
   the finishing sweep, so it is also the ceiling on `max_turns`, which Soma's `season_rule_spec()`
   caps at 1000 to match. web's `configs.sh` reads the `MATCH_LOOP_MAX = <n>` line, so keep that
@@ -239,9 +278,12 @@ Orion:
   connector's base URL onto `path`, so the URL is trimmed with `substr(url, length(endpoint))`,
   which is exact only because the storage connector sets `force_path_style`. `http_call` parses
   replies as JSON unless given `response_format: "text"`, and an S3 PUT answers with an empty body.
-- **A mapping whose logic is `null` writes nothing.** The slot keeps the previous sweep's value, and
-  `temp_data` survives a sweep, so a per-item slot is cleared explicitly with
-  `{"path": …, "unset": true}`, which removes it (a read then sees `null`).
+- **A mapping whose logic is `null` writes nothing.** The slot keeps its value, and `temp_data`
+  survives a sweep except the loop's `scratch` field, which the engine resets to `{}` before every
+  sweep: the match loop's per-turn slots live under `temp_data.t` (`scratch: "t"`) and the
+  roster's per-item ones under `temp_data.s`, so nothing there is cleared by hand. A slot outside
+  the scratch field is cleared explicitly with `{"path": …, "unset": true}`, which removes it (a
+  read then sees `null`).
 - **`${…}` in `docker/*.toml.tmpl` takes three forms and SKIPS comments.** `${X}`, `${X:-default}`
   and `${X:?message}` — which stops the boot with that sentence and the file, line and column when X
   is unset or empty, so requiredness can live beside the setting instead of only in
@@ -274,7 +316,12 @@ Other:
   non-reproducible cost counters in a replay can't break conformance. Keep anything
   non-deterministic out of the other fields.
 - **`engine.ops_budget` must equal Soma's `adapter_ops_max`,** and `orion_version` must equal Soma's.
-  web's `configs.sh` checks both, and the admission claim refuses a runner on another Orion.
+  web's `configs.sh` checks both, and the admission claim refuses a runner on another Orion. The
+  budget is typed twice in `runner.toml.tmpl`, under `[engine]` where the engine reads it and under
+  `[vars]` where the token exchange reports it (`metadata.vars` cannot read `[engine]`): Soma
+  stores the reported number and answers `409 ops_budget_mismatch` to a runner whose ceiling
+  disagrees with a season's, so a body that stops sending it is every runner refused, silently,
+  the day a season enables graph rules. `configs.sh` checks the two copies against each other.
 - **Soma's `admit_observations` × `admit_infer_ms` must fit `kalam-admit`'s `timeout_ms`.** The probe
   plays every observation the claim carries, one at a time, each up to its deadline; a run cut off
   by its timeout never reports, and the submission expires. web's `configs.sh` checks it. The

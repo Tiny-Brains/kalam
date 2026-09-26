@@ -1,5 +1,5 @@
 # Orion config for a RUNNER: a Kalam replica on hardware the deployment does not own. Requires
-# 1.9.1. Baked into this repository's image at /etc/orion/runner.toml.tmpl; the Soma half is soma's
+# 1.10.0. Baked into this repository's image at /etc/orion/runner.toml.tmpl; the Soma half is soma's
 # docker/soma.toml.tmpl. A runner is the only way Kalam runs: it reaches the platform through Soma's
 # gate and holds no database credential.
 #
@@ -87,6 +87,23 @@ node_version = "${RUNNER_NODE_VERSION:-dev}"
 # leaves its row alone.
 match_slots = ${KALAM_MATCH_LANES:-0}
 
+# WHAT THIS NODE PRICES AN ADAPTER AT, reported at every token exchange so Soma can refuse a runner
+# whose ceiling disagrees with a season's adapter_ops_max (409 ops_budget_mismatch) instead of
+# striking seats for a rule nobody wrote down. `[vars]` cannot read `[engine]`, so the number is
+# typed twice in this file and MUST EQUAL `[engine] ops_budget` below; web's
+# scripts/check/configs.sh checks the two against each other and against Soma's.
+ops_budget = 1000000
+
+# THE LONGEST MATCH THIS NODE CAN HOLD, and how many seats it asks at once, reported at every token
+# exchange: Soma's claim hands a row only to a runner whose timeout covers the row's turn_ms x
+# max_turns x ceil(seats / seat_concurrency) plus a tenth, so a match this node could not finish
+# inside its deadline is never claimed here, reaped and re-claimed for ever. match_timeout_ms MUST
+# EQUAL the match channel's timeout_ms in shared/kalam.json (web's scripts/check/configs.sh checks);
+# seat_concurrency is what entrypoint.sh derived (cores / lanes) or RUNNER_SEAT_CONCURRENCY, the
+# same number load-package.sh writes into `infer`'s max_concurrency.
+match_timeout_ms = 2400000
+seat_concurrency = ${KALAM_SEAT_CONCURRENCY:-1}
+
 # NO poll_secs. One was carried here once and NOTHING READ IT -- the poll rate is the cron
 # channel's `schedule` (`*/5 * * * * *`), which is package content, versioned with the channel and
 # the same on every node that loads it. A runner cannot slow its own polling from this file, and
@@ -102,7 +119,7 @@ models_bucket_connector = "kalam-models"
 # `orion_version` -- a match recorded against one Orion and admitted against another is exactly
 # what a re-validation sweep looks for. It is the same ORION_VERSION this image was built from,
 # which is why it is not typed twice.
-orion_version = "${ORION_VERSION:-1.9.1}"
+orion_version = "${ORION_VERSION:-1.10.0}"
 
 # The node's own admin API, for the roster clock and for entrypoint.sh's package load. It never
 # leaves this machine.

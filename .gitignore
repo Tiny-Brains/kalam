@@ -20,3 +20,7 @@ keys/
 
 # A machine's own compose override: which engine this checkout builds against (see its header).
 docker-compose.override.yml
+
+# The offline cases' model bytes: copies of ants-starter's nano-bc that scripts/check-tests.sh makes
+# beside the committed manifests. No repository but the starter commits a model.
+tests/models/*/model.onnx
