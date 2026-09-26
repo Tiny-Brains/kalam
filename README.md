@@ -408,14 +408,13 @@ plugins/tb-ants/               optional local engine for lint (gitignored)
   over a 1000-turn match, and there is no setting to turn it off. A cron run always writes a trace
   row, whatever `tracing.mode` says.
 - `refusal_ceiling` in the runner config is read by nothing in api mode.
-- An admitting runner's idle poll is a token exchange and a claim every 10 s, like a lane's.
+- An admitting runner's idle poll is a claim every 10 s, like a lane's; the token it uses is cached for eight minutes.
 - Every admission runs twice on the admitting runner: Orion queues one when a model is
   registered and `admit?wait=true` runs another inline, and registration has no way to skip the
   queued one. When the inline one fails fast, `kalam-admit` deletes the model before the queued one
   finishes, which logs `Model admission could not be recorded` at ERROR.
 - Every `infer` element copies the whole message, so a turn copies the match's context once per
   seat asked. It is freed as the call ends, but it is CPU a match spends on bookkeeping.
-- The `db`-mode branch is still in the package as a rollback. CLAUDE.md has the removal checklist.
 - Nobody has checked whether tract's CPU kernels give bit-identical results on arm64 and amd64.
   Images ship for both, and a memory fed back every turn is where a difference would change a move.
   Play one memory match on each architecture and compare the replays before a season allows memory.

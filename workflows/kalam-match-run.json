@@ -64,11 +64,7 @@
               "input": {
                 "message": "kalam-match: run ended",
                 "level": "info",
-                "fields": {
-                  "match_id": { "var": "data.row.id" },
-                  "outcome": "no_token",
-                  "turn": { "var": "temp_data.i" }
-                }
+                "fields": { "match_id": { "var": "data.row.id" }, "outcome": "no_token" }
               }
             }
           },
@@ -266,11 +262,7 @@
               "input": {
                 "message": "kalam-match: run ended",
                 "level": "info",
-                "fields": {
-                  "match_id": { "var": "data.row.id" },
-                  "outcome": "model_unavailable",
-                  "turn": { "var": "temp_data.i" }
-                }
+                "fields": { "match_id": { "var": "data.row.id" }, "outcome": "model_unavailable" }
               }
             }
           },
