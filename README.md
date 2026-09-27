@@ -251,6 +251,28 @@ runners behind one address  ≈  Soma's runner_token_rate / 0.89   (about 33 at 
 Past that, the gate answers 429, the run ends without an error trace, and the machine shows **quiet**
 while it is plainly switched on.
 
+### Run a season's runner
+
+A university (or any group running its own season) plays its season with its own machines, and only
+its season, by starting the runner from a **season key** instead of a platform one. Nothing about the
+runner changes — the key carries the season, and the gate scopes every claim to it:
+
+- **Mint the key on the season's admin page**, not `/admin/runners`. A season admin (or a platform
+  admin) mints it at `POST /v1/games/{game}/seasons/{slug}/runner-keys`; it is shown once, exactly
+  like a platform key. A key minted there binds itself, and every runner started from it, to that one
+  season for ever — it never serves another, whatever another season's policy says.
+- **Everything else is identical** to [What to copy from the deployment](#what-to-copy-from-the-deployment):
+  put the season key in `RUNNER_KEY`, copy the trust public key and `keys/signatures/` and the
+  read-only bucket credentials from the deployment, point `SOMA_URL` at it, and `docker compose up -d`.
+- **`--profile admit` when the season admits its own submissions.** If the season's fleet policy has
+  `admissions: own` (or `both` and you want to admit here), start the admitting runner beside the
+  match runner with `docker compose --profile admit up -d`, on a season key. Nothing is admitted in a
+  season whose admissions are `own` while it has no admitting runner up.
+- **What a season runner may play** is the season's fleet policy (`fleet.matches`), set by the
+  platform admin: `own` (only this season's own runners), `platform` (only the platform fleet) or
+  `both`. A platform admin can change it while the season is live, and a season runner claims from its
+  season under `own` or `both` and never otherwise. The season's Runners screen shows only its keys.
+
 ## Troubleshooting
 
 | Symptom | Cause | Fix |

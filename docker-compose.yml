@@ -20,7 +20,9 @@
 # WHAT THE OPERATOR COPIES FROM THE DEPLOYMENT. Three things:
 #
 #   RUNNER_KEY             minted on the admin Runners screen, shown once. Revoking it there stops
-#                          this machine within one token lifetime (ten minutes).
+#                          this machine within one token lifetime (ten minutes). It MAY instead be a
+#                          season's key, minted on that season's admin page: the same runner, bound to
+#                          that one season for ever (README, "Run a season's runner").
 #   TB_TRUST_PUBLIC_KEY    the deployment's plugin trust key, and its signatures directory -- the
 #                          engine's signature belongs to whoever holds that key, so it can be in
 #                          neither this image (shared by every deployment) nor this repository.
