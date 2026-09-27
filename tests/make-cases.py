@@ -26,7 +26,7 @@ OBS = json.load(open(f"{ANTS}/reference/observations.json"))["observations"][:3]
 MANIFEST = json.load(open(f"{HERE}/models/tb.nano-bc/manifest.json"))
 REGISTRATION = {k: v for k, v in MANIFEST.items() if k != "artifact"}
 
-VARS = {"engine_digest": "sha256:" + "0" * 64, "orion_version": "1.10.0", "runner_key": "k",
+VARS = {"engine_digest": "sha256:" + "0" * 64, "orion_version": "1.11.0", "runner_key": "k",
         "runner_label": "h", "arch": "arm64", "node_version": "dev", "match_slots": 2,
         "ops_budget": 1000000, "match_timeout_ms": 2400000, "seat_concurrency": 2, "models_bucket_connector": "kalam-models"}
 TRIGGER = {"scheduled_for": "2026-09-26T03:00:00Z", "attempt": 1,

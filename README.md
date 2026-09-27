@@ -1,6 +1,6 @@
 # kalam
 
-Kalam is the TinyBrains match runner. It is an Orion 1.10.0 package (cron channels, workflows,
+Kalam is the TinyBrains match runner. It is an Orion 1.11.0 package (cron channels, workflows,
 connectors) shipped inside a runnable image, `ghcr.io/tiny-brains/kalam`: orion-server,
 the package, and the Ants engine from one ants release. A runner claims queued matches through
 [Soma](https://github.com/Tiny-Brains/soma)'s runner gate, plays them turn by turn on Orion's own
@@ -91,7 +91,7 @@ Set in `.env`. [`docker-compose.yml`](docker-compose.yml) refuses to start witho
 | `RUNNER_ADMIN_PORT` | `8090` | Loopback port for this node's `/health` and `/metrics` |
 | `RUNNER_ARCH` | from `uname -m` | Reported on the Runners screen. Leave it unset |
 | `RUNNER_NODE_VERSION` | `dev` | Reported on the Runners screen |
-| `ORION_VERSION` | `1.10.0` | Recorded on every match. Must equal the Soma node's `orion_version` |
+| `ORION_VERSION` | `1.11.0` | Recorded on every match. Must equal the Soma node's `orion_version` |
 | `RUNNER_SHUTDOWN_DRAIN_SECS` | `5` | Orion `server.shutdown_drain_secs` |
 | `RUNNER_SHUTDOWN_FORCE_SECS` | `2700` | Orion `server.shutdown_force_timeout_secs`: the real bound on a draining match |
 | `RUNNER_CRON_SHUTDOWN_SECS` | `2700` | Orion `cron.shutdown_timeout_secs` |
@@ -112,7 +112,7 @@ service and nothing on `runner`, whose role is `match`. The terms a match is pla
 and renew interval, the refusal and strike ceilings, the replay and model prefixes) arrive on each
 claim from the match's season, and are not configured here.
 
-Build args: `ANTS_RELEASE` (empty means the latest ants release) and `ORION_VERSION` (`1.10.0`).
+Build args: `ANTS_RELEASE` (empty means the latest ants release) and `ORION_VERSION` (`1.11.0`).
 
 ## Run a runner
 

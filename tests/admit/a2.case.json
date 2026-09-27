@@ -5,7 +5,7 @@
   "metadata": {
     "vars": {
       "engine_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-      "orion_version": "1.10.0",
+      "orion_version": "1.11.0",
       "runner_key": "k",
       "runner_label": "h",
       "arch": "arm64",
