@@ -229,7 +229,7 @@ setting.
 | **live** | Authorised and calling in | Nothing |
 | **quiet** | Authorised, and silent for longer than a lease | The machine is off, can't reach the gate, or is being rate-limited on the token route (see below). Its in-flight matches are already lapsing |
 | **wedged** | Quiet and still holding matches | Revoke the runner so it takes no more. Its rows are reaped on their own |
-| **key or owner** | The runner row is fine, but its key is revoked or the key's owner is no longer an admin | Re-grant the owner, or mint a new key |
+| **key or owner** | The runner row is fine, but its key is revoked, or the key's owner is no longer a platform admin (a platform key) or an admin of the key's season (a season key) | Re-grant the owner, or mint a new key |
 | **revoked** | Stopped on purpose | Nothing. It stays listed because `matches.played_by` points at it |
 
 The screen also warns when live runners disagree about the engine digest or the Orion version.
@@ -257,7 +257,7 @@ A university (or any group running its own season) plays its season with its own
 its season, by starting the runner from a **season key** instead of a platform one. Nothing about the
 runner changes — the key carries the season, and the gate scopes every claim to it:
 
-- **Mint the key on the season's admin page**, not `/admin/runners`. A season admin (or a platform
+- **Mint the key on the season's desk** (`/season-admin?season=<slug>`), not `/admin/runners`. A season admin (or a platform
   admin) mints it at `POST /v1/games/{game}/seasons/{slug}/runner-keys`; it is shown once, exactly
   like a platform key. A key minted there binds itself, and every runner started from it, to that one
   season for ever — it never serves another, whatever another season's policy says.
@@ -271,7 +271,9 @@ runner changes — the key carries the season, and the gate scopes every claim t
 - **What a season runner may play** is the season's fleet policy (`fleet.matches`), set by the
   platform admin: `own` (only this season's own runners), `platform` (only the platform fleet) or
   `both`. A platform admin can change it while the season is live, and a season runner claims from its
-  season under `own` or `both` and never otherwise. The season's Runners screen shows only its keys.
+  season under `own` or `both` and never otherwise. The desk's runners panel lists the season's keys and
+  their runners, whoever minted them, and revokes a key or stops a runner; the platform's Runners page
+  lists every key and runner, each with its season.
 
 ## Troubleshooting
 
@@ -281,7 +283,7 @@ runner changes — the key carries the season, and the gate scopes every claim t
 | `failed to apply at startup: … is not serving on this node` and the container stops | The reload quarantined something the package carries, so the node would have served without it | Read the WARN lines above: each names the member and why. A missing or wrong signature (`RUNNER_SIG_DIR`, `TB_TRUST_PUBLIC_KEY`) quarantines the engine this way |
 | `activation stopped at workflows '…': connector(s) … not found` | A connector was skipped at load, so no workflow naming it could activate | A connector needs **every** `env://` it names to resolve to something well-formed. Since Orion 1.9.0 an EMPTY value is refused too ("uses no scheme"), so the `db`-mode placeholders are URLs that route nowhere, not empty strings |
 | Replay PUT 403 `SignatureDoesNotMatch` | `RUNNER_BLOB_ENDPOINT` differs from Soma's | Make them the same string |
-| Shown as **quiet** or **key or owner**, or never appears | The token exchange is refused: 401 (the key is revoked or unknown, or its owner is no longer an admin) or 429 (too many runners behind one address) | Mint a new key or re-grant the owner. For 429, raise Soma's `runner_token_rate` or spread the machines across addresses |
+| Shown as **quiet** or **key or owner**, or never appears | The token exchange is refused: 401 (the key is revoked or unknown, or its owner no longer administers the platform, or the key's season) or 429 (too many runners behind one address) | Mint a new key or re-grant the owner. For 429, raise Soma's `runner_token_rate` or spread the machines across addresses |
 | Matches are claimed and handed back; rows eventually fail `MODEL_UNAVAILABLE` | This node can't serve a seat's model, because its roster clock hasn't registered and activated it | Check `MODELS_ENDPOINT`, `MODELS_BUCKET` and the read key. Against a local stack, also check `RUNNER_ALLOW_PRIVATE_URLS=1` |
 | Calls to this node's admin API get 401 | `ORION_ADMIN_BEARER` must be the whole `Bearer <key>` header | Leave it as compose sets it |
 | Rows stay `running` after a restart | The drain was cut short: Docker's grace period ran out before Orion's | Keep `RUNNER_STOP_GRACE` above drain + force. The rows are reaped when their lease lapses |
@@ -429,7 +431,6 @@ plugins/tb-ants/               optional local engine for lint (gitignored)
 - Orion's `Message.audit_trail` still records one value-less entry per task per sweep, about 1–2 MB
   over a 1000-turn match, and there is no setting to turn it off. A cron run always writes a trace
   row, whatever `tracing.mode` says.
-- `refusal_ceiling` in the runner config is read by nothing in api mode.
 - An admitting runner's idle poll is a claim every 10 s, like a lane's; the token it uses is cached for eight minutes.
 - Every admission runs twice on the admitting runner: Orion queues one when a model is
   registered and `admit?wait=true` runs another inline, and registration has no way to skip the
@@ -440,9 +441,12 @@ plugins/tb-ants/               optional local engine for lint (gitignored)
 - Nobody has checked whether tract's CPU kernels give bit-identical results on arm64 and amd64.
   Images ship for both, and a memory fed back every turn is where a difference would change a move.
   Play one memory match on each architecture and compare the replays before a season allows memory.
-- A 1000-turn match with a large-class memory on the largest board has not been played on a real
-  runner, so its RSS is unmeasured. Since Orion 1.10.0 `orion-server test` runs a case at a node's
-  cost, so an offline run can measure it.
+- A model's memory is measured offline, not on a live fleet. `orion-server test` on
+  `kalam-match-run` (the image's binary, glibc, `MALLOC_ARENA_MAX=2`), 1000 turns on
+  `basic-xlarge-8p` with all 8 seats at the schema ceiling (16 bytes a cell plus 262,144 flat):
+  about 140 MiB peak against about 100 MiB for 2 bytes a cell, and a quarter longer. The extra is
+  about 11 bytes of RSS per byte carried, flat over the match, so memory does not bound a runner's
+  slots; the cores do. Six such matches at once were summed, not run in one process.
 
 ## License
 

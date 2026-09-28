@@ -18,17 +18,22 @@ cd "$(dirname "$0")/.."
   exit 1
 }
 
-# THE MODEL BYTES ARE THE STARTER'S. Both fixtures are the nano-bc graph under a manifest of their
-# own (tests/models/*/manifest.json, committed); the artifact beside each is a copy of the starter's,
-# which no repository but ants-starter commits.
+# THE MODEL BYTES ARE THE STARTER'S. Every fixture is a starter graph under a manifest of its own
+# (tests/models/*/manifest.json, committed); the artifact beside each is a copy of the starter's,
+# which no repository but ants-starter commits. tb.nano-bc-max-r is the starter's model that
+# remembers (M8's memory carry); every other fixture is the nano-bc graph.
 starter="${ANTS_STARTER:-../ants-starter}"
 for m in tests/models/*/; do
   [ -f "$m/model.onnx" ] && continue
-  [ -f "$starter/models/nano-bc/model.onnx" ] || {
-    echo "$m has no model.onnx and $starter/models/nano-bc/model.onnx is not there to copy (ANTS_STARTER=<checkout>)" >&2
+  case "$m" in
+    */tb.nano-bc-max-r/) src="$starter/models/nano-bc-max-r/model.onnx" ;;
+    *) src="$starter/models/nano-bc/model.onnx" ;;
+  esac
+  [ -f "$src" ] || {
+    echo "$m has no model.onnx and $src is not there to copy (ANTS_STARTER=<checkout>)" >&2
     exit 1
   }
-  cp "$starter/models/nano-bc/model.onnx" "$m/model.onnx"
+  cp "$src" "$m/model.onnx"
 done
 
 # `test` reads one directory flat, so the groups run one at a time: the match loop, the admission

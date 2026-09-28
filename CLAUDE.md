@@ -263,10 +263,11 @@ Orion:
   `for_each` does not define is refused as `UNKNOWN_FIELD` rather than ignored (a misspelt
   `max_concurency` used to run one call at a time in silence). `fmt` puts `for_each` before
   `function`.
-- **Loop bounds.** `kalam-match-run` loops at most `MATCH_LOOP_MAX` (1010) sweeps: one per turn plus
+- **Loop bounds.** `kalam-match-run` loops at most 1010 sweeps (its `loop.max`): one per turn plus
   the finishing sweep, so it is also the ceiling on `max_turns`, which Soma's `season_rule_spec()`
-  caps at 1000 to match. web's `configs.sh` reads the `MATCH_LOOP_MAX = <n>` line, so keep that
-  exact form. `[engine] max_loop_iterations` must sit above it. The
+  caps at 1000 to match. web's `configs.sh` reads `loop.max` out of
+  `workflows/kalam-match-run.json` by path, so a renamed workflow fails the check rather than
+  passing it. `[engine] max_loop_iterations` must sit above it. The
   channel's `timeout_ms` (40 min) is sized for 1000 turns × 1000 ms plus overhead, and the shutdown
   force timeout (2700 s) must stay above it.
 - **`models.max_timeout_ms` clamps `model_infer`'s deadline silently.** It must be at least the

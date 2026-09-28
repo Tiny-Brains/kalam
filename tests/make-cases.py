@@ -16,7 +16,7 @@ expectation the workflow does not meet today, and a later change to which tasks 
     python3 tests/make-cases.py            # rewrite every case (needs ants/dist for the map and
                                            # the reference observations: ANTS_DIST=<dist>)
 """
-import json, os, subprocess, sys, tempfile
+import json, os, shutil, subprocess, sys, tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 KALAM = os.path.dirname(HERE)
@@ -74,7 +74,7 @@ def stubs(api, orion, blobs="", cache=None):
     return s
 
 
-def dry_run(workflow, case_stubs):
+def dry_run(workflow, case_stubs, model_dir=f"{HERE}/models"):
     with tempfile.TemporaryDirectory() as d:
         json.dump(case_stubs, open(f"{d}/stubs.json", "w"))
         json.dump({"vars": VARS, "trigger": TRIGGER}, open(f"{d}/meta.json", "w"))
@@ -83,7 +83,7 @@ def dry_run(workflow, case_stubs):
                               "-w", f"{KALAM}/workflows/{workflow}", "-i", f"{d}/in.json",
                               "-m", f"{d}/meta.json", "--stubs", f"{d}/stubs.json",
                               "--plugin-dir", f"{KALAM}/plugins/tb-ants",
-                              "--model-dir", f"{HERE}/models", "--trace", "none"],
+                              "--model-dir", model_dir, "--trace", "none"],
                              capture_output=True, text=True)
     if out.returncode != 0:
         sys.exit(f"dry-run of {workflow} failed:\n{out.stderr[-1500:]}")
@@ -207,6 +207,50 @@ write("match", "M7: no token from the gate ends the run as no_token without a cl
       stubs(gate(token=None), {"data": {"status": "active"}}),
       {"data.outcome": "no_token", "data.claimed": None},
       {"http_call": [{"path": "/v1/runner/token"}], "cache_write": []})
+
+
+def forgetful_twin():
+    """tests/models plus tb.nano-bc-max-f: the same graph as tb.nano-bc-max-r under a manifest whose
+    memory input is zeros on every turn, whatever the view carries -- so it plays exactly as
+    max-r would if the runner never handed a memory back."""
+    d = tempfile.mkdtemp()
+    for m in os.listdir(f"{HERE}/models"):
+        shutil.copytree(f"{HERE}/models/{m}", f"{d}/{m}")
+    twin = json.load(open(f"{HERE}/models/tb.nano-bc-max-r/manifest.json"))
+    twin["name"] = "tb.nano-bc-max-f"
+    for i in twin["inputs"]:
+        if i["name"] == "memory_in":
+            i["adapter"] = {"zeros": [{"merge": [[1, 2], {"var": "size"}]}, "i8"]}
+    os.makedirs(f"{d}/tb.nano-bc-max-f")
+    shutil.copy(f"{HERE}/models/tb.nano-bc-max-r/model.onnx", f"{d}/tb.nano-bc-max-f/model.onnx")
+    json.dump(twin, open(f"{d}/tb.nano-bc-max-f/manifest.json", "w"))
+    return d
+
+
+def carried(run):
+    """The memory a remembering seat ends on is not what the same graph ends on when it is never
+    handed one: if the runner dropped the carry, the two runs would be the same run."""
+    d = forgetful_twin()
+    try:
+        twin = dry_run(M, stubs(gate(models=("tb.nano-bc-max-f", "tb.nano-bc")), {"data": {"status": "active"}}), d)
+    finally:
+        shutil.rmtree(d)
+    mine, theirs = run["data"]["mem0"], twin["data"]["mem0"]
+    assert lookup(twin, "data.mem0.tensor.shape") == [1, 2, 24, 24], "the forgetful twin wrote no memory"
+    assert mine != theirs, "seat 0's memory is what it would be if it were never handed back"
+
+
+# The memory seat 0 ends on is pinned byte for byte, and `carried` proves at generation that it is
+# not the value a dropped carry would give -- so the case fails if the runner stops handing the
+# memory back. A retrained nano-bc-max-r in the starter moves the bytes: regenerate.
+M8 = stubs(gate(models=("tb.nano-bc-max-r", "tb.nano-bc")), {"data": {"status": "active"}})
+write("match", "M8: a seat whose model declares a memory is handed it back every turn, and only that seat", M, M8,
+      {"data.outcome": "complete", "data.stopped_at_turn": 10, "data.struck": 0,
+       "data.refs[0].strikes": 0, "data.refs[0].infer_turns": 10,
+       "data.mem0.tensor.dtype": "i8", "data.mem0.tensor.shape": [1, 2, 24, 24],
+       "data.mem0.tensor.data": lookup(dry_run(M, M8), "data.mem0.tensor.data"),
+       "data.amem0": None, "data.mem1": None, "data.amem1": None},
+      check=carried)
 
 print("admit")
 A = "kalam-admit-run.json"
