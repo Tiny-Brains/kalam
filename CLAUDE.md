@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-`kalam` ships **no server code**. It is an Orion **1.11.0** package, which the orion-server in its
+`kalam` ships **no server code**. It is an Orion **1.11.1** package, which the orion-server in its
 runner image applies to itself at boot (`[packages] apply`). It has three clocks. **`kalam-match`** is
 ONE channel whose `concurrency.slots` is how many matches this node plays at once, each run of
 `kalam-match-run`: claim ONE queued row, then `observe` → one `model_infer` fanned out over the

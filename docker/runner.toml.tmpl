@@ -1,5 +1,5 @@
 # Orion config for a RUNNER: a Kalam replica on hardware the deployment does not own. Requires
-# 1.11.0. Baked into this repository's image at /etc/orion/runner.toml.tmpl; the Soma half is soma's
+# 1.11.1. Baked into this repository's image at /etc/orion/runner.toml.tmpl; the Soma half is soma's
 # docker/soma.toml.tmpl. A runner is the only way Kalam runs: it reaches the platform through Soma's
 # gate and holds no database credential.
 #
@@ -119,7 +119,7 @@ models_bucket_connector = "kalam-models"
 # `orion_version` -- a match recorded against one Orion and admitted against another is exactly
 # what a re-validation sweep looks for. It is the same ORION_VERSION this image was built from,
 # which is why it is not typed twice.
-orion_version = "${ORION_VERSION:-1.11.0}"
+orion_version = "${ORION_VERSION:-1.11.1}"
 
 # The node's own admin API, for the roster clock and for entrypoint.sh's package load. It never
 # leaves this machine.

@@ -31,7 +31,7 @@
 # one signature verifies on both. Only the runtime stage is per platform.
 
 ARG ANTS_RELEASE=
-ARG ORION_VERSION=1.11.0
+ARG ORION_VERSION=1.11.1
 ARG CURL_VERSION=8.22.0
 ARG DEBIAN_VERSION=bookworm-slim
 
