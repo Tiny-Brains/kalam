@@ -156,7 +156,11 @@ That file never builds, never lets `RUNNER_ALLOW_PRIVATE_URLS` through, runs Ori
   without it. The image carries the engine, and a runner whose engine digest is not
   `games.active_engine_digest` claims nothing, for ever, with no error anywhere.
 - **The architecture doesn't matter.** The cartridge is wasm32, so an arm64 Mac derives the same
-  digest as an amd64 deployment. Images are published for linux/amd64 and linux/arm64.
+  digest as an amd64 deployment. Images are published for linux/amd64 and linux/arm64. **The model
+  runtime does not divide them either**: the offline cases, M8 and A4 among them, pin a memory
+  tensor byte for byte after ten turns of tract inference with the memory fed back each turn, and
+  they pass on both (`./scripts/check-cross-arch.sh`), so two machines of different architectures
+  play the same moves from the same board.
 - **Disable sleep.** Use Energy Saver, or run the stack under `caffeinate -dimsu`. A sleeping host
   stops renewing its leases. The matches lapse and are replayed by another runner, so no work is
   lost, but the machine keeps claiming matches it won't finish.
@@ -312,6 +316,7 @@ every statement a runner needs is a call to Soma's gate. The per-seat tasks are 
 | `./scripts/check-defs.sh` | The whole no-stack gate, in order: `clippy` (which runs lint's gate first), `fmt --check`, `check-names.sh`, `check-tests.sh`, and `clippy -c docker/runner.toml.tmpl` (all `--deny-warnings`) | `orion-server` in `shared/package.json`'s range, on `PATH`; what the two rows below need |
 | `./scripts/check-names.sh` | The ids and the three tags: `[kalam, clock, <domain>]`, the domain from the same closed list Soma uses | nothing; it reads the set |
 | `./scripts/check-tests.sh` | Every `*.case.json` under `tests/` through `orion-server test`: the gate, this node's admin API, the replay bucket and the token cache stubbed, the engine and the models real | the cartridge in `plugins/tb-ants`, and an ants-starter checkout for the model bytes (`ANTS_STARTER=<checkout>`, default `../ants-starter`) |
+| `./scripts/check-cross-arch.sh` | The same cases under the OTHER architecture (`linux/amd64` from an arm64 machine, and the reverse), on the orion-server release the Dockerfile pins. M8 and A4 pin a memory tensor byte for byte, so passing there is the proof that tract answers the same bytes on both and a carried memory cannot make the two play different moves. Slow under emulation; run it when the Orion pin moves, when a model fixture changes, and before a season that allows memory opens | Docker with emulation for the other platform; the network, the first time |
 | `docker compose up -d --build` | Builds this checkout and runs it as a runner | Docker and a Soma |
 | `ORION_ADMIN=… ORION_ADMIN_API_KEY=… ./scripts/load-package.sh [--prune]` | Shapes this role's package, compiles it and applies it into a running node; `--prune` retires what the applied version carried and this one does not. `--compile-only -o <file>` stops after compiling, which is what `entrypoint.sh` calls at boot | `orion-server` |
 
@@ -376,6 +381,8 @@ scripts/
                                the offline cases, then clippy -c
   check-names.sh               the ids and the three tags
   check-tests.sh               the offline cases alone
+  check-cross-arch.sh          the same cases on the other architecture, to prove tract's
+                               kernels answer the same bytes on amd64 and arm64
   load-package.sh              shape this role's package (which channels, how many slots),
                                compile it, apply it; --prune retires what a version dropped.
                                entrypoint.sh calls it with --compile-only at boot
@@ -464,9 +471,6 @@ plugins/tb-ants/               optional local engine for lint (gitignored)
   finishes, which logs `Model admission could not be recorded` at ERROR.
 - Every `infer` element copies the whole message, so a turn copies the match's context once per
   seat asked. It is freed as the call ends, but it is CPU a match spends on bookkeeping.
-- Nobody has checked whether tract's CPU kernels give bit-identical results on arm64 and amd64.
-  Images ship for both, and a memory fed back every turn is where a difference would change a move.
-  Play one memory match on each architecture and compare the replays before a season allows memory.
 - A model's memory is measured offline, not on a live fleet. `orion-server test` on
   `kalam-match-run` (the image's binary, glibc, `MALLOC_ARENA_MAX=2`), 1000 turns on
   `basic-xlarge-8p` with all 8 seats at the schema ceiling (16 bytes a cell plus 262,144 flat):

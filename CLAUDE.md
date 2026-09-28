@@ -25,6 +25,7 @@ runner, configuration, troubleshooting, releasing, layout) is in `README.md`.
 ```sh
 ./scripts/check-defs.sh                # clippy + fmt + names + the offline cases + clippy -c; no stack
 ./scripts/check-tests.sh               # just the cases (check-defs.sh runs them too)
+./scripts/check-cross-arch.sh          # the same cases on the OTHER architecture; slow, not in the gate
 docker compose up -d --build           # a real match: this runner against web's local stack
 
 # ONE case, or one group: `test` takes a directory or a single file, and reads a directory FLAT --
