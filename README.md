@@ -294,16 +294,17 @@ runner changes — the key carries the season, and the gate scopes every claim t
 
 ## Developing the package
 
-Everything is authored JSON and committed: `workflows/`, `channels/`, `connectors/` and `shared/`.
-There is no generator and no build step — `orion-server compile` resolves `$from`, `$use` and
-`$each` into what the admin API accepts. The package ships no SQL: every statement a runner needs
-is a call to Soma's gate. The per-seat tasks are written ONCE, over
+Everything is authored JSON and committed: `workflows/`, `channels/`, `connectors/`, `shared/` and
+the offline cases in `tests/`. There is no generator and no build step — `orion-server compile`
+resolves `$from`, `$use` and `$each` into what the admin API accepts. The package ships no SQL:
+every statement a runner needs is a call to Soma's gate. The per-seat tasks are written ONCE, over
 `constants.seats`. [CLAUDE.md](CLAUDE.md) has the rules and the Orion gotchas.
 
 | Command | What it does | Needs |
 |---|---|---|
-| `./scripts/check-defs.sh` | `orion-server lint`, `clippy`, `fmt --check` over the whole set, and `clippy -c docker/runner.toml.tmpl` (all `--deny-warnings`) | `orion-server` in `shared/package.json`'s range, on `PATH` |
+| `./scripts/check-defs.sh` | The whole no-stack gate, in order: `clippy` (which runs lint's gate first), `fmt --check`, `check-names.sh`, `check-tests.sh`, and `clippy -c docker/runner.toml.tmpl` (all `--deny-warnings`) | `orion-server` in `shared/package.json`'s range, on `PATH`; what the two rows below need |
 | `./scripts/check-names.sh` | The ids and the three tags: `[kalam, clock, <domain>]`, the domain from the same closed list Soma uses | nothing; it reads the set |
+| `./scripts/check-tests.sh` | Every `*.case.json` under `tests/` through `orion-server test`: the gate, this node's admin API, the replay bucket and the token cache stubbed, the engine and the models real | the cartridge in `plugins/tb-ants`, and an ants-starter checkout for the model bytes (`ANTS_STARTER=<checkout>`, default `../ants-starter`) |
 | `docker compose up -d --build` | Builds this checkout and runs it as a runner | Docker and a Soma |
 | `ORION_ADMIN=… ORION_ADMIN_API_KEY=… ./scripts/load-package.sh [--prune]` | Shapes this role's package, compiles it and applies it into a running node; `--prune` retires what the applied version carried and this one does not. `--compile-only -o <file>` stops after compiling, which is what `entrypoint.sh` calls at boot | `orion-server` |
 
@@ -312,7 +313,17 @@ is a call to Soma's gate. The per-seat tasks are written ONCE, over
 - Lint checks the engine calls too when the engine is present in the gitignored `plugins/tb-ants/`:
   copy `tb-ants.wasm`, `plugin.toml`, `plugin.json` and `cartridge.json` there from an ants release
   archive or from `../ants/dist/`.
-- There are no unit tests. Lint is the compiler, and it does not exercise leases or turns. A real match needs a Soma: web's stack plus this runner. `tinybrains conform` re-runs a
+- The offline cases under `tests/` are the test suite: they run a whole workflow with the gate and
+  the buckets stubbed and the engine and the models real, which is what lint cannot do — a lease
+  lost mid-match, a seat struck to its ceiling, a version this node lacks. **Never hand-edit a
+  `*.case.json`**: `python3 tests/make-cases.py` writes all of them from one place and replays each
+  against a dry-run first, so a case cannot claim something the workflow does not do. It needs an
+  ants `dist/` for the map and the reference observations (`ANTS_DIST=<dist>`).
+- The three models under `tests/models/` are ants-starter's bytes, pinned in
+  `tests/models/SHA256SUMS`. `check-tests.sh` copies each from the starter checkout and checks it,
+  because `m8.case.json` pins a memory tensor byte for byte — a retrained starter model is a red
+  build, and the digest is what makes the message say so. Regenerate the cases, then update the file.
+- A real match still needs a Soma: web's stack plus this runner. `tinybrains conform` re-runs a
   replay locally and diffs every field and every turn.
 - After any change, rebuild (`docker compose up -d --build`). A runner started from an older image
   is still running the old package.
@@ -348,8 +359,16 @@ shared/package.json            the package's name and the Orion range it needs
 workflows/                     kalam-match-run, kalam-roster-run, kalam-admit-run -- authored, with the
                                per-seat tasks written once over constants.seats with $each
 channels/                      kalam-match (its slots are the matches at once), kalam-roster, kalam-admit
+tests/
+  make-cases.py                writes every case below, from one place; replays each first
+  match/ admit/ roster/        the cases, one directory per clock
+  models/                      a manifest per fixture; the bytes are the starter's, and gitignored
+  models/SHA256SUMS            those bytes, pinned -- m8 asserts a memory tensor byte for byte
 scripts/
-  check-defs.sh                no-stack gate: clippy (which gates on lint), fmt, clippy -c
+  check-defs.sh                no-stack gate: clippy (which gates on lint), fmt, the names,
+                               the offline cases, then clippy -c
+  check-names.sh               the ids and the three tags
+  check-tests.sh               the offline cases alone
   load-package.sh              shape this role's package (which channels, how many slots),
                                compile it, apply it; --prune retires what a version dropped.
                                entrypoint.sh calls it with --compile-only at boot

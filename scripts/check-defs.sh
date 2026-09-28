@@ -4,7 +4,7 @@
 #
 #   ./scripts/check-defs.sh
 #
-# Two gates, and between them they are everything:
+# Four gates, and between them they are everything:
 #
 #   clippy   RUNS LINT'S GATE FIRST -- the set resolves, every reference, every function input
 #            schema, every declared env var -- and stops on it ("N lint error(s) -- fix those
@@ -14,12 +14,21 @@
 #            input key the function ignores. An ignored input key is silent at run time and a
 #            whole feature stops working, which is why it is --deny-warnings.
 #   fmt      the house style, so a diff is the change and not a reformat.
+#   names    the ids and the three tags; Orion checks that a reference RESOLVES and has no opinion
+#            about what anything is CALLED, and `?tag=` is the only navigation there is.
+#   tests    the offline cases: a whole workflow run with the gate stubbed and the engine and the
+#            models real. Lint proves the set RESOLVES; this is what proves a lost lease halts and
+#            a struck seat forfeits.
 #
 # It runs clippy TWICE, and the second run is not a repeat: three rules say nothing without the
 # serving config, and "said nothing" reads exactly like "found nothing".
 #
-# What this does NOT check is whether the SQL inside those definitions resolves against the
-# schema -- that is ./scripts/check-sql.sh, which needs the database.
+# There is no SQL check here and no sql/ directory: every statement a runner needs is a call to
+# Soma's gate, so the one copy -- and the grant boundary it rests on -- is soma's to check
+# (scripts/check-sql.sh there). check-names.sh FAILS if an sql/ appears in this repository.
+#
+# What this does NOT check is anything that needs a stack: a real match is `docker compose up -d
+# --build` against web's local platform.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

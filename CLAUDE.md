@@ -11,8 +11,10 @@ registers, admits and activates on this node every version the ladder says is ve
 **`kalam-admit`** is an admitting runner's only clock (`RUNNER_ROLE=admit`): claim one submission Soma
 prepared, register it, let Orion admit it, play it over the reference observations (one
 `model_infer` a sweep of its loop, chained for a model with a memory), delete it and report. Soma runs no model and judges the report.
-Everything is authored JSON and committed — `workflows/`, `channels/`, `connectors/`, `sql/`,
-`shared/` — with no generator and no build step. `entrypoint.sh` copies the package aside and shapes
+Everything is authored JSON and committed — `workflows/`, `channels/`, `connectors/`, `shared/`
+and the offline cases in `tests/` — with no generator and no build step. There is no `sql/`:
+`scripts/check-names.sh` fails the build if one appears, because a statement here would be a second
+copy of the gate's and nothing would compare them. `entrypoint.sh` copies the package aside and shapes
 THAT for this node's role and slot count before the server applies it. Kalam owns **execution only**. Soma owns the schema, the
 public routes and every competitive decision, ants owns the rules, and Orion runs the models. The
 packages coordinate through Postgres and never call each other. Anything human-facing (running a
@@ -21,8 +23,17 @@ runner, configuration, troubleshooting, releasing, layout) is in `README.md`.
 ## Checks
 
 ```sh
-./scripts/check-defs.sh                # lint + clippy + fmt + clippy -c, all --deny-warnings; no stack
+./scripts/check-defs.sh                # clippy + fmt + names + the offline cases + clippy -c; no stack
+./scripts/check-tests.sh               # just the cases (check-defs.sh runs them too)
 docker compose up -d --build           # a real match: this runner against web's local stack
+
+# ONE case, or one group: `test` takes a directory or a single file, and reads a directory FLAT --
+# which is why check-tests.sh walks tests/match, tests/admit and tests/roster one at a time.
+orion-server test tests/match/m8.case.json \
+  --definitions shared --plugin-dir plugins/tb-ants --model-dir tests/models
+
+# Rewrite every case after a workflow change. Never hand-edit a *.case.json.
+ANTS_DIST=../ants/dist python3 tests/make-cases.py
 
 # There is no check-sql.sh here any more: this package ships no SQL. The grant boundary it used to
 # assert is soma's -- scripts/check-sql.sh there, and scripts/verify/run.sh against a live database.
@@ -33,8 +44,30 @@ docker compose up -d --build           # a real match: this runner against web's
 docker run --rm --entrypoint orion-server ghcr.io/tiny-brains/kalam clippy /pkg/kalam --deny-warnings
 ```
 
-There is no unit-test suite. Lint is the compiler, and it does not exercise leases or turns. `tinybrains conform` on a replay the runner wrote is the test that a match was *played*
-identically, not just recorded.
+**The offline cases are the test suite, and they exist because lint does not exercise leases or
+turns.** Every `*.case.json` under `tests/` runs a whole workflow through `orion-server test` with
+the gate, this node's admin API, the replay bucket and the token cache stubbed, and the engine and
+the models REAL: a case asserts the branch a run takes (`expect_tasks`), what it answers (`expect`)
+and what it sends (`expect_calls`) — a lease lost mid-match, a seat struck to its ceiling, a version
+this node lacks. **A case is never hand-written**: `tests/make-cases.py` is the one place they are
+authored, and it replays each against a dry-run before writing it, so a case cannot claim something
+the workflow does not do today. The model bytes are ants-starter's, pinned in
+`tests/models/SHA256SUMS`, because M8 pins a memory tensor byte for byte.
+**A stub is one value per connector**, so every `kalam-api` route in a run answers the same object.
+That works only because the fate fields the routes are read by are disjoint (`token`,
+`match`/`claim`/`contract`, `started`, `applied`, `url`/`endpoint`/`key`, `state`/`mine`, `job`,
+`n`/`items`) — a new gate route answering a name another already uses is a case that cannot tell
+them apart.
+
+**Nothing here runs from a bare clone.** `plugins/tb-ants/` (the four cartridge files, from an ants
+`dist/` or release) and `tests/models/*/model.onnx` are both gitignored; `check-tests.sh` copies the
+model bytes itself from `$ANTS_STARTER` (default `../ants-starter`) and checks each against
+`tests/models/SHA256SUMS`. CI pins that checkout with the repository variable `ANTS_STARTER_REF` the
+way `ANTS_RELEASE` pins the cartridge, so a fixture the starter has not landed yet is a red build
+here — which is the right way round: the starter's models are the source of truth.
+
+`tinybrains conform` on a replay the runner wrote is the other half: the test that a match was
+*played* identically, not just recorded.
 
 ## Rules
 
@@ -215,6 +248,11 @@ Orion:
   `[packages] apply` is that invariant now: `/readyz` answers 503 (`components.packages: "applying"`)
   until every listed package is serving, and any failure — including a member the reload quarantines
   — exits the process non-zero.
+- **`$from` DOES NOT NEST INSIDE A SHARED CONSTANT.** A constant's body is substituted verbatim, so
+  a `$from` written inside one reaches the channel unresolved and the schema refuses it there
+  ("is a shared-value reference ... This endpoint takes one document"). That is why each
+  `*_channel_config` in `shared/kalam.json` carries the tracing literal rather than pointing at a
+  `clock_tracing` constant: the sharing has to happen at the USE, one `$from` deep.
 - **An absent `env://` skips the connector, and SINCE 1.9.0 SO DOES AN EMPTY ONE.** An endpoint is
   scheme-checked again after its references resolve, so `""` is refused ("uses no scheme") exactly as
   `ftp://` would be. A workflow that names a skipped connector can't activate, and a connector needs
@@ -269,7 +307,9 @@ Orion:
   `workflows/kalam-match-run.json` by path, so a renamed workflow fails the check rather than
   passing it. `[engine] max_loop_iterations` must sit above it. The
   channel's `timeout_ms` (40 min) is sized for 1000 turns × 1000 ms plus overhead, and the shutdown
-  force timeout (2700 s) must stay above it.
+  force timeout (2700 s) must stay above it. `kalam-roster-run` bounds at 4096, and its `loop.over`
+  is the roster array itself, so the shorter of the two ends it; the `overflow` task is what warns
+  that the ladder sent more versions than one tick registers. R5 pins both.
 - **`models.max_timeout_ms` clamps `model_infer`'s deadline silently.** It must be at least the
   season ceiling for `turn_ms`.
 - **Model preload.** `preload = "referenced"` warms only literal model ids, and `kalam-match` computes

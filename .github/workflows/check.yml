@@ -4,9 +4,9 @@
 #
 # What the checks need that the repository does not carry: orion-server at the version
 # shared/package.json requires, the cartridge (plugins/tb-ants, from the ants release the way the
-# Dockerfile takes it, or the repository variable ANTS_RELEASE to pin one), and the starter's
-# nano-bc bytes for the two test models (cloned from Tiny-Brains/ants-starter, the one repository
-# that commits a model).
+# Dockerfile takes it, or the repository variable ANTS_RELEASE to pin one), and the bytes of the
+# three test models (cloned from Tiny-Brains/ants-starter, the one repository that commits a model,
+# at ANTS_STARTER_REF or its default branch, and checked against tests/models/SHA256SUMS).
 
 name: check
 
@@ -50,8 +50,24 @@ jobs:
           cp artifacts/tb-ants.wasm artifacts/plugin.json artifacts/cartridge.json artifacts/plugin.toml plugins/tb-ants/
           echo "ants ${PIN:-latest}: engine sha256:$(sha256sum plugins/tb-ants/tb-ants.wasm | cut -d' ' -f1)"
 
-      - name: The starter's model bytes, for the two test models
-        run: git clone --depth 1 https://github.com/Tiny-Brains/ants-starter ../ants-starter
+      # THE FIXTURES' BYTES, AND THE ONE CROSS-REPO ORDERING THIS REPOSITORY HAS. The three test
+      # models are copies of ants-starter's, which is the only repository that commits a model;
+      # scripts/check-tests.sh copies them and checks each against tests/models/SHA256SUMS.
+      #
+      # THE REF IS EXPLICIT, the way ANTS_RELEASE pins the cartridge: the repository variable
+      # ANTS_STARTER_REF names a branch or tag, and the default branch is only the default. A
+      # fixture the starter has not released yet is a red build here until it lands there -- which
+      # is the right way round, because the starter's models are the source of truth and kalam's
+      # cases are pinned to their bytes.
+      - name: The starter's model bytes, for the three test models
+        env:
+          REF: ${{ vars.ANTS_STARTER_REF }}
+        run: |
+          set -eu
+          git clone --depth 1 ${REF:+--branch "$REF"} \
+            https://github.com/Tiny-Brains/ants-starter ../ants-starter
+          echo "ants-starter ${REF:-default branch}: $(git -C ../ants-starter rev-parse --short HEAD)"
+          ls ../ants-starter/models
 
       - name: check-defs
         run: ./scripts/check-defs.sh

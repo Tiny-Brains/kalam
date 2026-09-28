@@ -22,9 +22,17 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 KALAM = os.path.dirname(HERE)
 ANTS = os.environ.get("ANTS_DIST", os.path.join(os.path.dirname(KALAM), "ants", "dist"))
 MAP = json.load(open(f"{ANTS}/maps/basic-tiny-2p.json"))
-OBS = json.load(open(f"{ANTS}/reference/observations.json"))["observations"][:3]
+_OBS_ALL = json.load(open(f"{ANTS}/reference/observations.json"))["observations"]
+OBS = _OBS_ALL[:3]
+# FOUR OBSERVATIONS THAT CROSS A BOARD SIZE CHANGE, for the memory round trip: the reference set
+# changes board at index 18, so this window is two observations on one size and two on the next.
+# The chain must restart at that boundary -- a memory is only fed forward when the size matches --
+# so exactly two of the four are fed, which is what A4 pins.
+OBS_SPAN = _OBS_ALL[16:20]
 MANIFEST = json.load(open(f"{HERE}/models/tb.nano-bc/manifest.json"))
 REGISTRATION = {k: v for k, v in MANIFEST.items() if k != "artifact"}
+MEMO = json.load(open(f"{HERE}/models/tb.nano-bc-max-r/manifest.json"))
+MEMO_REGISTRATION = {k: v for k, v in MEMO.items() if k != "artifact"}
 
 VARS = {"engine_digest": "sha256:" + "0" * 64, "orion_version": "1.11.1", "runner_key": "k",
         "runner_label": "h", "arch": "arm64", "node_version": "dev", "match_slots": 2,
@@ -54,13 +62,15 @@ def gate(models=("tb.nano-bc", "tb.nano-bc"), max_turns=10, renew=4, ceiling=5, 
     return g
 
 
-def admission(state="passed"):
+def admission(state="passed", model="tb.nano-bc", registration=None, observations=None):
     """The admission claim's answer, and the node's admission record, for one submission."""
     job = {"token": "tok", "claim": {"token": "ct-a"},
-           "admission": {"model": "tb.nano-bc", "version_id": "v-1", "registration": REGISTRATION,
+           "admission": {"model": model, "version_id": "v-1",
+                         "registration": REGISTRATION if registration is None else registration,
                          "artifact": {"key": "models/v-1/model.onnx", "digest": "sha256:" + "1" * 64},
-                         "budget_ops": 1000000, "infer_ms": 5000, "observations": OBS}}
-    node = {"data": {"model_id": "tb.nano-bc", "status": "active" if state == "passed" else "draft",
+                         "budget_ops": 1000000, "infer_ms": 5000,
+                         "observations": OBS if observations is None else observations}}
+    node = {"data": {"model_id": model, "status": "active" if state == "passed" else "draft",
                      "admission": {"state": state, **({"stage": "probe", "reason": "x"} if state != "passed" else {})},
                      "stats": {"parameters": 1000, "artifact_bytes": 11350, "opset": 17, "operators": ["Conv"]}}}
     return job, node
@@ -214,8 +224,10 @@ def forgetful_twin():
     memory input is zeros on every turn, whatever the view carries -- so it plays exactly as
     max-r would if the runner never handed a memory back."""
     d = tempfile.mkdtemp()
+    # The DIRECTORIES only: models/ also holds SHA256SUMS, which pins the fixtures' bytes.
     for m in os.listdir(f"{HERE}/models"):
-        shutil.copytree(f"{HERE}/models/{m}", f"{d}/{m}")
+        if os.path.isdir(f"{HERE}/models/{m}"):
+            shutil.copytree(f"{HERE}/models/{m}", f"{d}/{m}")
     twin = json.load(open(f"{HERE}/models/tb.nano-bc-max-r/manifest.json"))
     twin["name"] = "tb.nano-bc-max-f"
     for i in twin["inputs"]:
@@ -276,6 +288,33 @@ write("admit", "A3: nothing to admit ends the run at idle", A,
       stubs({"token": "tok"}, {"data": {}}),
       {"data.probing": None},
       {"http_call": [{"path": "/v1/runner/token"}, {"path": "/v1/runner/admissions/claim"}]})
+
+# THE MEMORY ROUND TRIP, WHICH NOTHING ELSE HERE REACHES. A1-A3 probe tb.nano-bc, which declares no
+# memory: `data.remembers` is false and the whole chain -- the carried view, `fed`, `lost`,
+# `rt_checked`, `rt_failed` and the exclusion of a fed failure from `data.errored` -- never runs.
+# This probes the model that DOES remember, over a window that crosses a board size change.
+#
+# WHY `checked` IS 2 AND NOT 3: a memory is fed forward only when the previous call answered AND
+# the board is the same size, so the chain restarts at the boundary. Four observations, two sizes:
+# the first of each pair is fed nothing, the second is fed. `failed` is 0 because every call
+# answers -- and it is the field that must stay 0, since Soma reads a non-zero one as
+# MEMORY_ROUND_TRIP and a submission cannot be resubmitted against it.
+job, node = admission("passed", model="tb.nano-bc-max-r", registration=MEMO_REGISTRATION,
+                      observations=OBS_SPAN)
+write("admit", "A4: a model that declares a memory is fed its own last output, and the chain restarts on a new board", A,
+      stubs(job, node),
+      {"data.probing": True, "data.remembers": True, "data.checked": 4, "data.errored": False,
+       "data.ok": True, "data.reason": False,
+       "temp_data.probe.checked": 4, "temp_data.probe.round_trip": {"checked": 2, "failed": 0}},
+      {"http_call": [{"path": "/v1/runner/token"}, {"path": "/v1/runner/admissions/claim"},
+                     {"path": "/models"},
+                     {"path": "/models/tb.nano-bc-max-r/admit?wait=true"},
+                     {"path": "/models/tb.nano-bc-max-r/status"},
+                     {"path": "/models/tb.nano-bc-max-r"},
+                     {"path": "/v1/runner/admissions/v-1/report",
+                      "body": {"claim_token": "ct-a",
+                               "probe": {"checked": 4, "errored": False,
+                                         "round_trip": {"checked": 2, "failed": 0}}}}]})
 
 def overflowed(run):
     assert run["tasks"].index("overflow") == 4, "the warn did not run right after the roster read"

@@ -1,0 +1,18 @@
+# THE STARTER'S MODEL BYTES, PINNED. scripts/check-tests.sh copies each model.onnx from an
+# ants-starter checkout and checks it against this file before a case runs.
+#
+# WHY A DIGEST AND NOT A TRUST IN THE CLONE: m8.case.json pins seat 0's ending memory tensor BYTE
+# FOR BYTE, because that is the only way to prove the runner hands a memory back rather than
+# dropping it. A retrained model in the starter is therefore a red build, and without this file it
+# is a red build whose message is a tensor diff naming nothing. With it, the failure says which
+# model moved and what to do about it.
+#
+# TO UPDATE: the starter's models are the source of truth, never these lines. Re-run
+# `python3 tests/make-cases.py` (which replays every case against the new bytes) and then
+# `shasum -a 256 tests/models/*/model.onnx > /dev/null` -- the header here is kept by hand.
+#
+# tb.nano-bad and tb.nano-bc are the same graph under different manifests: nano-bad's adapter is
+# broken on purpose, which is a manifest fact and not a model one, so the two digests agree.
+53f3255790c361180b996655aeb2d0d81dda5cc215413051a6f5e62acc17987b  tb.nano-bad/model.onnx
+0765a4e242750e982d7268f829f2b1eb9d2fc082ea40a2bd273d25e369e0794d  tb.nano-bc-max-r/model.onnx
+53f3255790c361180b996655aeb2d0d81dda5cc215413051a6f5e62acc17987b  tb.nano-bc/model.onnx
