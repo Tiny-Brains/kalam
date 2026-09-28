@@ -193,6 +193,13 @@ prepared (`POST /v1/runner/admissions/claim`), registers it on its own node from
 Soma rebuilt, lets Orion admit it, plays it over up to 64 reference observations, deletes it, and
 reports (`POST /v1/runner/admissions/{id}/report`). Soma decides.
 
+It also reports `admit_slots = 1` at every token exchange, as a match runner reports its
+`match_slots`, and Soma marks the row `admits` from it. That is the whole of how the platform can
+tell an admin that an admission queue has no machine to serve it -- a state that otherwise looks
+exactly like nothing being wrong, since a waiting submission spends no attempt and simply expires.
+So **stopping the last admitting runner of a season whose `fleet.admissions` is `own` stops
+admission for that season**, and its desk says so within ninety seconds.
+
 A model that declares a memory output is fed its own memory during the probe: each observation gets
 the memory the previous call wrote, when both are on a board of the same size and that call answered.
 The report's `probe.round_trip` says how many calls were fed a memory (`checked`) and how many of them

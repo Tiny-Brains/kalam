@@ -30,6 +30,13 @@
             null
           ]
         },
+        "admit_slots": {
+          "if": [
+            { ">": [{ "var": "metadata.vars.admit_slots" }, 0] },
+            { "var": "metadata.vars.admit_slots" },
+            null
+          ]
+        },
         "ops_budget": { "var": "metadata.vars.ops_budget" },
         "match_timeout_ms": { "var": "metadata.vars.match_timeout_ms" },
         "seat_concurrency": { "var": "metadata.vars.seat_concurrency" }

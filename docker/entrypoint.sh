@@ -87,12 +87,19 @@ esac
 # match and has one worker, the admission's.
 if [ "$KALAM_ROLE" = admit ]; then
   KALAM_MATCH_LANES=0
+  # AND THE ONE LANE IT DOES OPEN, reported at every token exchange as `admit_slots`. Soma marks the
+  # row `admits` from it, which is how it can tell an admin that a season's admission queue has no
+  # machine to serve it -- a state that otherwise looks like nothing being wrong. It is a separate
+  # fact from match_slots rather than its absence, because a runner that reports neither is one from
+  # before either was reported, not an admitter.
+  KALAM_ADMIT_LANES=1
   KALAM_CRON_WORKERS=1
   # One, not empty: the template's `${KALAM_SEAT_CONCURRENCY:-1}` falls back only when the variable
   # is UNSET, and an admitting runner asks one inference a sweep in any case.
   KALAM_SEAT_CONCURRENCY=1
   echo "==> an admitting runner: the kalam-admit channel, 1 cron worker, no match lanes"
 else
+  KALAM_ADMIT_LANES=0
   lanes="${RUNNER_CRON_WORKERS:-2}"
   case "$lanes" in
     ''|*[!0-9]*) echo "RUNNER_CRON_WORKERS must be a whole number of matches, got '$lanes'" >&2; exit 1 ;;
@@ -131,7 +138,7 @@ else
   KALAM_SEAT_CONCURRENCY=$seats
   echo "==> $KALAM_SEAT_CONCURRENCY seat(s) of a match asked at once ($cpus core(s))"
 fi
-export KALAM_ROLE KALAM_MATCH_LANES KALAM_CRON_WORKERS KALAM_SEAT_CONCURRENCY
+export KALAM_ROLE KALAM_MATCH_LANES KALAM_ADMIT_LANES KALAM_CRON_WORKERS KALAM_SEAT_CONCURRENCY
 
 # No `migrate` step: [storage] auto_migrate is on in runner.toml.tmpl, so the server migrates its
 # own state database at boot, and SQLite ignores --wait.
