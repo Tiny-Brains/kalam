@@ -45,9 +45,14 @@ jobs:
         run: |
           set -eu
           url="https://github.com/Tiny-Brains/ants/releases/${PIN:+download/}${PIN:-latest/download}/ants-artifacts.tar.gz"
-          curl -fsSL --connect-timeout 20 --retry 5 --retry-all-errors -o ants.tar.gz "$url"
-          mkdir -p artifacts plugins/tb-ants && tar -xzf ants.tar.gz -C artifacts
-          cp artifacts/tb-ants.wasm artifacts/plugin.json artifacts/cartridge.json artifacts/plugin.toml plugins/tb-ants/
+          curl -fsSL --connect-timeout 20 --retry 5 --retry-all-errors -o "$RUNNER_TEMP/ants.tar.gz" "$url"
+          # UNPACKED OUTSIDE THE CHECKOUT. check-defs.sh walks the whole tree, so a second
+          # plugin.toml anywhere inside it is `tb.ants` declared twice and one lint error.
+          mkdir -p "$RUNNER_TEMP/ants" plugins/tb-ants
+          tar -xzf "$RUNNER_TEMP/ants.tar.gz" -C "$RUNNER_TEMP/ants"
+          for f in tb-ants.wasm plugin.json cartridge.json plugin.toml; do
+            cp "$RUNNER_TEMP/ants/$f" plugins/tb-ants/
+          done
           echo "ants ${PIN:-latest}: engine sha256:$(sha256sum plugins/tb-ants/tb-ants.wasm | cut -d' ' -f1)"
 
       # THE FIXTURES' BYTES, AND THE ONE CROSS-REPO ORDERING THIS REPOSITORY HAS. The three test
