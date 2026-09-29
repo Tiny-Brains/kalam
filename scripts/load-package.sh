@@ -39,6 +39,7 @@
 #   KALAM_ROLE              match (default) or admit
 #   KALAM_MATCH_LANES       matches at once, as the match channel's slots (unset keeps the committed 4)
 #   KALAM_SEAT_CONCURRENCY  seats one match asks at once, as `infer`'s for_each max_concurrency
+#   KALAM_MATCH_TIMEOUT_MS  the longest match this node holds, as the match channel's timeout_ms
 #                           (unset keeps the shipped 1: one seat at a time)
 #
 # Everything a deployment varies is read by the definitions and the instance config: the platform's
@@ -94,6 +95,20 @@ else
     sed "s/\"slots\": [0-9][0-9]*/\"slots\": $KALAM_MATCH_LANES/" "$ch" > "$ch.tmp" && mv "$ch.tmp" "$ch"
     grep -q "\"slots\": $KALAM_MATCH_LANES" "$ch" || {
       echo "could not set the match channel to $KALAM_MATCH_LANES slot(s)" >&2; exit 1; }
+  fi
+  if [ -n "${KALAM_MATCH_TIMEOUT_MS:-}" ]; then
+    # THE THIRD CAPACITY LITERAL, and the one that used to be a release. The match channel's
+    # `timeout_ms` is the longest match this node can hold, and Soma's claim reads the same number
+    # off the runner's row: leave it at the committed default on a node that asks one seat at a
+    # time and every board wider than two seats is a row this replica never claims. It lives in
+    # shared/kalam.json's constants, where `match_channel_config` is the first of three timeouts --
+    # the admitter's and the roster's follow it and are not this -- so the substitution is anchored
+    # on that key and the line after it, like `max_concurrency` below.
+    kj="$SET/shared/kalam.json"
+    sed "/\"match_channel_config\": {/{n;s/\"timeout_ms\": [0-9][0-9]*/\"timeout_ms\": $KALAM_MATCH_TIMEOUT_MS/;}" \
+      "$kj" > "$kj.tmp" && mv "$kj.tmp" "$kj"
+    grep -A1 '"match_channel_config": {' "$kj" | grep -q "\"timeout_ms\": $KALAM_MATCH_TIMEOUT_MS" || {
+      echo "could not set the match channel's timeout to $KALAM_MATCH_TIMEOUT_MS ms" >&2; exit 1; }
   fi
   if [ -n "${KALAM_SEAT_CONCURRENCY:-}" ]; then
     # `max_concurrency` is a literal too. It is the line after `"as": "sv"`, the fan-out of one

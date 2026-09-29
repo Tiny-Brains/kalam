@@ -83,7 +83,8 @@ Set in `.env`. [`docker-compose.yml`](docker-compose.yml) refuses to start witho
 | `KALAM_IMAGE` | required | The image, and so the engine: a release (`ghcr.io/tiny-brains/kalam:<version>`), or `tinybrains/kalam:dev` built from this checkout |
 | `MODELS_BUCKET` | `tinybrains-models` | The models bucket's name |
 | `RUNNER_CRON_WORKERS` | `2` | Matches at once: the match channel's `concurrency.slots`, written into it at boot, up to Orion's 64: change it here, not in the package. Orion's `cron.workers` is this plus one, for the roster. The runner reports it at every token exchange as `max_in_flight`, which Soma stores on its row and caps the claim by |
-| `RUNNER_SEAT_CONCURRENCY` | cores ÷ slots | Seats of one match asked at once, 1 to 8. Slots × seats above the cores strikes seats for the machine's load. Reported to Soma with the match channel's timeout, which then hands this runner only matches it can finish in time |
+| `RUNNER_SEAT_CONCURRENCY` | cores ÷ slots | Seats of one match asked at once, 1 to 8. Slots × seats above the cores strikes seats for the machine's load. Reported to Soma with the match deadline below, which together decide the widest board this runner is handed |
+| `RUNNER_MATCH_TIMEOUT_MS` | derived | The longest match this node holds, and so **the widest board it plays**: the boot line says which. Derived to cover the widest board the engine allows at its published limits (`turn_ms × max_turns × ceil(seats ÷ seat concurrency) × 1.1`), written into the match channel and reported to Soma; the shutdown bounds follow it. Set it to decline the wide boards — their rows go to a runner that can hold them — and free a crashed lane sooner |
 | `RUNNER_MAX_CACHE_BYTES` | 4 GiB | The on-disk model cache (the `runner-models` volume). The admitting runner caps its own at 256 MiB and keeps no volume |
 | `RUNNER_MAX_LOADED_BYTES` | 2 GiB | Model sessions held in memory at once |
 | `MALLOC_ARENA_MAX` | `2` | glibc arenas for orion-server. Uncapped, a busy runner holds gigabytes of memory it has freed |
@@ -176,6 +177,19 @@ That file never builds, never lets `RUNNER_ALLOW_PRIVATE_URLS` through, runs Ori
 - **A match asks its seats in parallel** when cores are left over: `RUNNER_SEAT_CONCURRENCY`
   defaults to cores ÷ slots. Every inference waits for one of Orion's per-core permits and that wait
   counts against its turn, so more slots means fewer seats at once, never more than the cores.
+- **Seats also decide how wide a board this machine plays.** Soma hands a row only to a runner whose
+  match deadline covers `turn_ms × max_turns × ceil(seats ÷ seat concurrency)`, plus a tenth, and a
+  board too wide for the fleet is not slow — it is never claimed, and the season pairs the narrow
+  boards in silence. The boot line says what this node reaches (`boards up to N seats wide`), and a
+  node that reaches less than the engine allows warns. **Many lanes at one seat each is the
+  configuration that loses the wide boards**: on ten cores, six lanes derive one seat at a time and
+  a deadline of two and a half hours to keep the eight-seat boards, where two lanes derive five
+  seats and thirty-six minutes. Fewer lanes with more seats is the answer on a small machine;
+  `RUNNER_MATCH_TIMEOUT_MS` is the deliberate opposite. The derivation prices the board at the
+  **cartridge's** published `turn_ms` and `max_turns`, which is what a season playing by the game's
+  own limits costs — a season that lowers `execution.turn_ms` costs less and is covered, and one
+  that raises it above the cartridge's costs more and narrows this node's reach, which is the case
+  to set the variable for.
 - **The state database is in memory.** Both compose files mount a 64 MiB tmpfs at
   `/var/lib/orion/state`, so a restart starts clean and a crash leaves nothing holding a match slot.
   A slot a crashed run still holds on a node whose state survived is freed by `orion-cli cron
@@ -298,6 +312,7 @@ runner changes — the key carries the season, and the gate scopes every claim t
 | Matches are claimed and handed back; rows eventually fail `MODEL_UNAVAILABLE` | This node can't serve a seat's model, because its roster clock hasn't registered and activated it | Check `MODELS_ENDPOINT`, `MODELS_BUCKET` and the read key. Against a local stack, also check `RUNNER_ALLOW_PRIVATE_URLS=1` |
 | Calls to this node's admin API get 401 | `ORION_ADMIN_BEARER` must be the whole `Bearer <key>` header | Leave it as compose sets it |
 | Rows stay `running` after a restart | The drain was cut short: Docker's grace period ran out before Orion's | Keep `RUNNER_STOP_GRACE` above drain + force. The rows are reaped when their lease lapses |
+| A season's wide boards never play: its 2-seat boards fill the ladder and the 4- or 6-seat ones show no matches, with nothing failing anywhere | This fleet's match deadline does not cover them. Soma hands a row only to a runner whose deadline covers `turn_ms × max_turns × ceil(seats ÷ seat concurrency)`, plus a tenth, so the board is enabled, paired and claimed by nobody | Read the boot line: `boards up to N seats wide`. Unset `RUNNER_MATCH_TIMEOUT_MS` to take the derived deadline, or give the node more seats per match (fewer `RUNNER_CRON_WORKERS`, or `RUNNER_SEAT_CONCURRENCY`), which shortens it |
 | Submissions stay `testing` (phase `queued`) | No admitting runner is up, or its claim is refused | Start one with `--profile admit`. A 409 `orion_version_differs` in its log means its image is not on Soma's Orion |
 | A submission expires `TIMED_OUT` | Every attempt's report decided nothing: the runner could not fetch it, ran out of time, or an inference failed outright, or the probe was over `max_probe_ms` on some attempts but not all | `admissions.requeued_for` names the last reason |
 | A submission is rejected `MEMORY_ROUND_TRIP` | The model declares a `memory` or `ant_memory` output, and a call the probe fed its own memory failed. Usually the memory input's adapter or shape cannot take what the output wrote | The competitor's to fix. `tinybrains` carries memory the same way, so a local match shows the failing turn |

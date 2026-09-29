@@ -1,7 +1,7 @@
 {
   "constants": {
     "match_channel_config": {
-      "timeout_ms": 2400000,
+      "timeout_ms": 8800000,
       "tracing": { "errors_only": true, "task_details": false }
     },
     "admit_channel_config": {

@@ -91,9 +91,20 @@ here — which is the right way round: the starter's models are the source of tr
   admitting runner sends `null`, which leaves its row alone. It also sends `match_timeout_ms` (the
   match channel's `timeout_ms`, typed once more under `[vars]`; configs.sh keeps them equal) and
   `seat_concurrency`, and Soma's claim hands this runner only a row whose turn_ms × max_turns × seat
-  batches, plus a tenth, fit inside that timeout: a match a node cannot finish is never claimed,
-  reaped and re-claimed for ever, it waits pending. Raise the channel's timeout and the shutdown
-  bounds together when a season needs longer matches.
+  batches, plus a tenth, fit inside that timeout.
+- **That timeout is the widest board this node plays, and it is derived.** A row no live runner can
+  hold is not re-claimed for ever — it is never claimed at all, and waits pending while the pair
+  clock skips its board, which is the failure that looks like an idle ladder. At one seat at a time
+  and the cartridge's 1000 ms × 1000 turns, a forty-minute timeout reaches **two seats**, so a
+  fixed one silently drops every 3-to-8-seat board a season enables. `entrypoint.sh` therefore sizes
+  it from the cartridge's own `limits` — `turn_ms × max_turns × ceil(limits.boards top ÷ seats) ×
+  1.1` — and `load-package.sh` writes it into the match channel's `timeout_ms` as the third
+  capacity literal, beside `slots` and `max_concurrency`. Seats shorten it; `RUNNER_MATCH_TIMEOUT_MS`
+  names it instead, which is how a node declines the wide boards and frees a crashed lane sooner.
+  **The shutdown bounds follow it** (the deadline plus five minutes, an admitter's from
+  `kalam-admit`'s timeout), so "a shutdown costs one MATCH, not one timeout" survives the move.
+  web's `configs.sh` prices the committed fallbacks against the envelope and fails if they fall
+  short.
 - **A gate route's request field names are the contract**, not the column names. `finish` binds `data.req.result` and `data.req.engine_digest`. Send other names
   and the route binds nulls and answers `409 claim_lost`. Run `grep data.req.` in the route before
   changing a request body here.
@@ -114,7 +125,9 @@ here — which is the right way round: the starter's models are the source of tr
   own slot as `metadata.trigger.singleton_slot`. `slots` is a LITERAL, never a reference (Orion
   takes lock cardinality as an authoring decision), so the committed `slots` is only a default and
   `entrypoint.sh` writes the number this node plays (`RUNNER_CRON_WORKERS`, up to Orion's 64) into
-  its copy. It is a deployment setting: never make a node's capacity wait for a package change. `shared/kalam.json` holds the shared
+  its copy. It is a deployment setting: never make a node's capacity wait for a package change —
+  and **the channel's `timeout_ms` is capacity too**, which is why `load-package.sh` writes that
+  as well. `shared/kalam.json` holds the shared
   `config`; it is a shared document the admin API does not accept, so the set is always compiled
   before it is applied.
 - **A runner has one role** (`RUNNER_ROLE`), and **`scripts/load-package.sh` is the one place that
@@ -161,6 +174,8 @@ here — which is the right way round: the starter's models are the source of tr
   `entrypoint.sh` derives as cores ÷ slots unless `RUNNER_SEAT_CONCURRENCY` names it. Each call's
   deadline runs from the moment it asks, **the wait for Orion's inference permit included**, and
   there is one permit per core — so slots × seats above the cores strikes seats for the node's load.
+  The same number divides a board into batches for the match deadline above, so fewer lanes with
+  more seats is what plays a wide board on a small machine.
   The admission probe asks one inference a sweep: it measures each alone.
 - **The board rides the claim.** The row carries `map` whole, and `world` passes it to `worldgen`,
   because the component carries no boards. `K_ROW` joins `season_maps` exactly as the gate's claim

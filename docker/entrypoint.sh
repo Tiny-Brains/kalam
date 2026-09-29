@@ -138,6 +138,84 @@ else
   KALAM_SEAT_CONCURRENCY=$seats
   echo "==> $KALAM_SEAT_CONCURRENCY seat(s) of a match asked at once ($cpus core(s))"
 fi
+
+# ---------------------------------------------------------------- the widest board this node plays
+# THE DEADLINE IS THIS NODE'S CAPACITY, AND CAPACITY IS A DEPLOYMENT SETTING. Soma's claim hands a
+# row only to a runner whose match deadline covers turn_ms x max_turns x ceil(seats / seat
+# concurrency), plus a tenth -- so this number decides HOW WIDE A BOARD THIS MACHINE MAY PLAY, and
+# a number too small for a board does not slow that board down, it removes it from the ladder. At
+# one seat at a time and the cartridge's own 1000 ms x 1000 turns, a forty-minute deadline reaches
+# two seats and stops: every 3-to-8-seat board a season enables is then a row no replica ever
+# claims, and the season pairs what is left in silence. That is the whole of the bug this replaces.
+#
+# SO IT IS DERIVED, from the envelope the cartridge publishes and the seats this node asks at once,
+# exactly as `slots` and `max_concurrency` are -- load-package.sh writes it into the match channel
+# the same way, and [vars] match_timeout_ms below reports the same number to Soma. Seats shorten it:
+# five at once play an eight-seat board in two batches, not eight.
+#
+# RUNNER_MATCH_TIMEOUT_MS names it instead. That is how a node DECLINES the wide boards -- their
+# rows go to a runner that can hold them, and nothing is stuck -- in exchange for releasing a
+# crashed lane sooner, because a hung occurrence holds its slot until this deadline whatever the
+# match was doing. The two shutdown bounds follow it (below), so a restart still costs one match.
+if [ "$KALAM_ROLE" = admit ]; then
+  # AN ADMITTER HOLDS NO MATCH. The longest occurrence it can have is kalam-admit's own channel
+  # timeout, so its shutdown bounds follow that and there is no match deadline to derive: Soma
+  # stores whatever match_timeout_ms it reports on a row that `plays_matches` keeps out of every
+  # fit the claim and the pair clock check.
+  a_ms=$(tr -d ' \n' < "$PKG/shared/kalam.json" \
+         | sed -n 's/.*"admit_channel_config":{"timeout_ms":\([0-9][0-9]*\).*/\1/p')
+  s=$(( ${a_ms:-600000} / 1000 + 30 ))
+  ORION_SHUTDOWN_FORCE_SECS="${ORION_SHUTDOWN_FORCE_SECS:-$s}"
+  ORION_CRON_SHUTDOWN_SECS="${ORION_CRON_SHUTDOWN_SECS:-$s}"
+  export ORION_SHUTDOWN_FORCE_SECS ORION_CRON_SHUTDOWN_SECS
+  echo "==> an admission holds a worker at most $((${a_ms:-600000} / 1000)) s; draining stops at ${s} s"
+else
+  CART=""
+  for c in "$PKG"/plugins/*/cartridge.json; do
+    if [ -r "$c" ]; then CART="$c"; break; fi
+  done
+  c_turn= c_turns= c_seats=
+  if [ -n "$CART" ]; then
+    flat=$(tr -d ' \n' < "$CART")
+    c_turn=$(printf '%s' "$flat" | sed -n 's/.*"turn_ms":\([0-9][0-9]*\).*/\1/p')
+    c_turns=$(printf '%s' "$flat" | sed -n 's/.*"max_turns":\([0-9][0-9]*\).*/\1/p')
+    c_seats=$(printf '%s' "$flat" | sed -n 's/.*"boards":{[^}]*"players":\[[0-9][0-9]*,\([0-9][0-9]*\)\].*/\1/p')
+  fi
+  if [ -z "$c_turn" ] || [ -z "$c_turns" ] || [ -z "$c_seats" ]; then
+    # An engine from before `limits.boards`, or a cartridge this shell cannot read. Say so and leave
+    # the template's own fallback standing rather than deriving a deadline from a guess.
+    echo "==> WARNING: no limits.turn_ms/max_turns/boards in ${CART:-any cartridge under $PKG/plugins}; the match deadline falls back to runner.toml.tmpl's" >&2
+  else
+    # Ceiling division both times: the batches this node makes of the widest board, and the tenth the
+    # claim adds. One batch of the cartridge's own limits is turn_ms x max_turns.
+    batches=$(( (c_seats + KALAM_SEAT_CONCURRENCY - 1) / KALAM_SEAT_CONCURRENCY ))
+    needed=$(( (c_turn * c_turns * batches * 11 + 9) / 10 ))
+    KALAM_MATCH_TIMEOUT_MS="${RUNNER_MATCH_TIMEOUT_MS:-$needed}"
+    case "$KALAM_MATCH_TIMEOUT_MS" in
+      ''|*[!0-9]*) echo "RUNNER_MATCH_TIMEOUT_MS must be a whole number of milliseconds, got '$KALAM_MATCH_TIMEOUT_MS'" >&2; exit 1 ;;
+    esac
+    [ "$KALAM_MATCH_TIMEOUT_MS" -ge 1000 ] || { echo "RUNNER_MATCH_TIMEOUT_MS must be at least 1000 ms" >&2; exit 1; }
+    export KALAM_MATCH_TIMEOUT_MS
+    # What that deadline actually reaches, by the claim's own arithmetic rather than by the intent
+    # above: an operator who named a shorter one is owed the seat count it buys, not a promise.
+    reach=$(( KALAM_MATCH_TIMEOUT_MS * 10 / (c_turn * c_turns * 11) * KALAM_SEAT_CONCURRENCY ))
+    [ "$reach" -le "$c_seats" ] || reach=$c_seats
+    if [ "$reach" -lt 2 ]; then
+      echo "==> WARNING: a ${KALAM_MATCH_TIMEOUT_MS} ms deadline holds no board at all (${c_turn} ms x ${c_turns} turns, $KALAM_SEAT_CONCURRENCY seat(s) at once); this node will claim nothing" >&2
+    elif [ "$reach" -lt "$c_seats" ]; then
+      echo "==> WARNING: boards up to $reach seats, not the $c_seats the engine allows; wider boards go to another runner (raise RUNNER_SEAT_CONCURRENCY, or unset RUNNER_MATCH_TIMEOUT_MS)" >&2
+    fi
+    echo "==> boards up to $reach seats wide, ${KALAM_MATCH_TIMEOUT_MS} ms deadline (${c_turn} ms x ${c_turns} turns, $KALAM_SEAT_CONCURRENCY seat(s) at once)"
+    # THE SHUTDOWN BOUNDS FOLLOW THE DEADLINE, which is what makes "a shutdown costs one MATCH, not
+    # one timeout" still true when the deadline moves: the outer force bound and cron's inner one are
+    # equal, and both sit five minutes past the longest match this node can be holding. An operator
+    # who set either keeps it.
+    s=$(( KALAM_MATCH_TIMEOUT_MS / 1000 + 300 ))
+    ORION_SHUTDOWN_FORCE_SECS="${ORION_SHUTDOWN_FORCE_SECS:-$s}"
+    ORION_CRON_SHUTDOWN_SECS="${ORION_CRON_SHUTDOWN_SECS:-$s}"
+    export ORION_SHUTDOWN_FORCE_SECS ORION_CRON_SHUTDOWN_SECS
+  fi
+fi
 export KALAM_ROLE KALAM_MATCH_LANES KALAM_ADMIT_LANES KALAM_CRON_WORKERS KALAM_SEAT_CONCURRENCY
 
 # No `migrate` step: [storage] auto_migrate is on in runner.toml.tmpl, so the server migrates its
@@ -157,6 +235,7 @@ export KALAM_ARTIFACT="$ARTIFACT"
 
 KALAM_ROLE="$KALAM_ROLE" KALAM_MATCH_LANES="$KALAM_MATCH_LANES" \
   KALAM_SEAT_CONCURRENCY="${KALAM_SEAT_CONCURRENCY:-}" \
+  KALAM_MATCH_TIMEOUT_MS="${KALAM_MATCH_TIMEOUT_MS:-}" \
   sh "$PKG/scripts/load-package.sh" --compile-only -o "$ARTIFACT" > /dev/null
 
 echo "==> starting orion-server with $CFG"
