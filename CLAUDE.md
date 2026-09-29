@@ -354,7 +354,7 @@ Orion:
 - **`${…}` in `docker/*.toml.tmpl` takes three forms and SKIPS comments.** `${X}`, `${X:-default}`
   and `${X:?message}` — which stops the boot with that sentence and the file, line and column when X
   is unset or empty, so requiredness can live beside the setting instead of only in
-  `docker-compose.yml`. Defaults and messages nest. A form written out in a comment no longer makes
+  `devops/compose/runner.yml`. Defaults and messages nest. A form written out in a comment no longer makes
   its variable required.
 
 JSONLogic (datalogic):

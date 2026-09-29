@@ -16,7 +16,13 @@ plugins/*/*.wasm.sig
 .env.*
 !.env.example
 !.env.prod.example
+!.env.qa.example
 keys/
+# `keys` WITHOUT THE SLASH TOO. On a machine whose deployment state lives in tinybrains/devops/,
+# this path is a SYMLINK into it -- and a symlink is a file, so the `keys/` rule above (which
+# matches only a directory) would leave it untracked-but-visible, one `git add -A` from a
+# committed pointer at the trust key.
+keys
 
 # A machine's own compose override: which engine this checkout builds against (see its header).
 docker-compose.override.yml
@@ -24,3 +30,6 @@ docker-compose.override.yml
 # The offline cases' model bytes: copies of ants-starter's nano-bc that scripts/check-tests.sh makes
 # beside the committed manifests. No repository but the starter commits a model.
 tests/models/*/model.onnx
+
+# DEPLOYMENT STATE LIVES IN tinybrains/devops/, not here -- no compose file, no .env, no keys. The
+# rules above are a backstop for anything made here by hand, and for a checkout from before the move.

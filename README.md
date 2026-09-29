@@ -17,10 +17,10 @@ port. Soma owns the schema, admission's verdicts, pairing and ratings,
 ## Quick start
 
 ```sh
-cp .env.example .env            # fill it in: see Configuration, or Run a runner
-docker compose up -d            # KALAM_IMAGE, a release; or tinybrains/kalam:dev and --build
-docker compose logs -f runner
-docker compose --profile admit up -d   # the deployment's admitting runner, on one machine
+cp ../devops/examples/runner.env.example ../devops/dev/kalam/.env            # fill it in: see Configuration, or Run a runner
+../devops/tb dev runner up -d            # KALAM_IMAGE, a release; or tinybrains/kalam:dev and --build
+../devops/tb dev runner logs -f runner
+../devops/tb dev runner --profile admit up -d   # the deployment's admitting runner, on one machine
 ```
 
 A healthy boot logs what it derived, generates the package for its role, and hands the applying to
@@ -39,7 +39,7 @@ the server:
 **`/readyz` answers 503 until the package is serving**, and any failure applying it stops the
 container non-zero — a runner that cannot claim is never reported as capacity. If it stops, the
 reason is the last error in the log: see [Troubleshooting](#troubleshooting). The admitting runner
-(`docker compose logs -f admit`) logs `==> an admitting runner: the kalam-admit channel, 1 cron worker,
+(`../devops/tb dev runner logs -f admit`) logs `==> an admitting runner: the kalam-admit channel, 1 cron worker,
 no match lanes`.
 
 **Against web's local stack** (bring it up first, as [web](https://github.com/Tiny-Brains/web)'s
@@ -51,11 +51,12 @@ README says):
 2. Copy `TB_TRUST_PUBLIC_KEY`, `MODELS_READ_ACCESS_KEY` and `MODELS_READ_SECRET_KEY` from web's `.env`.
 3. `RUNNER_KEY`: mint one on the admin Runners page.
 4. `ORION_ADMIN_KEY`: `openssl rand -hex 32`.
-5. `KALAM_IMAGE`: the release to test (web's `init.sh` prints the newest), then `docker compose up -d`;
-   or `KALAM_IMAGE=tinybrains/kalam:dev` and `docker compose up -d --build` for this checkout.
+5. `KALAM_IMAGE`: the release to test (web's `init.sh` prints the newest), then `../devops/tb dev runner up -d`;
+   or `KALAM_IMAGE=tinybrains/kalam:dev` and `../devops/tb dev runner up -d --build` for this checkout.
 
 **To run an unreleased engine**, build against an ants checkout's `dist/` with a machine-local
-`docker-compose.override.yml` (gitignored), and set `KALAM_IMAGE=tinybrains/kalam:dev` in `.env`:
+`devops/compose/runner.override.yml` (gitignored, layered by `tb`), and set
+`KALAM_IMAGE=tinybrains/kalam:dev` in `devops/dev/kalam/.env`:
 
 ```yaml
 services:
@@ -67,7 +68,7 @@ services:
 
 ## Configuration
 
-Set in `.env`. [`docker-compose.yml`](docker-compose.yml) refuses to start without the required ones.
+Set in this runner's `.env` (`devops/<env>/kalam/.env`). `devops/compose/runner.yml` refuses to start without the required ones.
 
 | Variable | Default | What it is |
 |---|---|---|
@@ -135,19 +136,19 @@ token for anything but its own loopback API.
 | `ORION_ADMIN_KEY` | generate it here | `openssl rand -hex 32`. It authorises only this node's own package load and roster clock |
 
 ```sh
-cp .env.example .env                                    # fill in the table above
+cp ../devops/examples/runner.env.example ../devops/dev/kalam/.env                                    # fill in the table above
 mkdir -p keys/signatures
 scp <deployment>:web/keys/signatures/* ./keys/signatures/
-docker compose up -d
-docker compose logs -f runner                           # wait for "==> loaded: …"
+../devops/tb dev runner up -d
+../devops/tb dev runner logs -f runner                           # wait for "==> loaded: …"
 ```
 
-**For a production deployment** (web's `docker-compose.prod.yml`, R2 behind it), use
-[`docker-compose.prod.yml`](docker-compose.prod.yml) with `.env.prod.example` instead:
+**For a production deployment** (web's `devops/compose/runner.prod.yml`, R2 behind it), use
+`devops/compose/runner.prod.yml` with `devops/examples/runner.prod.env.example` instead:
 
 ```sh
-cp .env.prod.example .env.prod                          # the same values; one R2_S3_ENDPOINT for both buckets
-docker compose -f docker-compose.prod.yml --env-file .env.prod up -d
+cp ../devops/examples/runner.prod.env.example ../devops/prod/kalam/.env                          # the same values; one R2_S3_ENDPOINT for both buckets
+../devops/tb prod runner up -d
 ```
 
 That file never builds, never lets `RUNNER_ALLOW_PRIVATE_URLS` through, runs Orion in production mode
@@ -202,7 +203,7 @@ That file never builds, never lets `RUNNER_ALLOW_PRIVATE_URLS` through, runs Ori
 
 ### The admitting runner
 
-`docker compose --profile admit up -d` starts `admit` beside `runner`: the same image, key and
+`../devops/tb dev runner --profile admit up -d` starts `admit` beside `runner`: the same image, key and
 addresses, labelled `<RUNNER_LABEL>-admit` on the Runners screen, with its own model cache. With
 `RUNNER_ROLE=admit` it loads `kalam-admit` and nothing else. Every 10 s it claims one submission Soma
 prepared (`POST /v1/runner/admissions/claim`), registers it on its own node from the registration
@@ -286,10 +287,10 @@ runner changes — the key carries the season, and the gate scopes every claim t
   season for ever — it never serves another, whatever another season's policy says.
 - **Everything else is identical** to [What to copy from the deployment](#what-to-copy-from-the-deployment):
   put the season key in `RUNNER_KEY`, copy the trust public key and `keys/signatures/` and the
-  read-only bucket credentials from the deployment, point `SOMA_URL` at it, and `docker compose up -d`.
+  read-only bucket credentials from the deployment, point `SOMA_URL` at it, and `../devops/tb dev runner up -d`.
 - **`--profile admit` when the season admits its own submissions.** If the season's fleet policy has
   `admissions: own` (or `both` and you want to admit here), start the admitting runner beside the
-  match runner with `docker compose --profile admit up -d`, on a season key. Nothing is admitted in a
+  match runner with `../devops/tb dev runner --profile admit up -d`, on a season key. Nothing is admitted in a
   season whose admissions are `own` while it has no admitting runner up.
 - **What a season runner may play** is the season's fleet policy (`fleet.matches`), set by the
   platform admin: `own` (only this season's own runners), `platform` (only the platform fleet) or
@@ -331,7 +332,7 @@ every statement a runner needs is a call to Soma's gate. The per-seat tasks are 
 | `./scripts/check-names.sh` | The ids and the three tags: `[kalam, clock, <domain>]`, the domain from the same closed list Soma uses | nothing; it reads the set |
 | `./scripts/check-tests.sh` | Every `*.case.json` under `tests/` through `orion-server test`: the gate, this node's admin API, the replay bucket and the token cache stubbed, the engine and the models real | the cartridge in `plugins/tb-ants`, and an ants-starter checkout for the model bytes (`ANTS_STARTER=<checkout>`, default `../ants-starter`) |
 | `./scripts/check-cross-arch.sh` | The same cases under the OTHER architecture (`linux/amd64` from an arm64 machine, and the reverse), on the orion-server release the Dockerfile pins. M8 and A4 pin a memory tensor byte for byte, so passing there is the proof that tract answers the same bytes on both and a carried memory cannot make the two play different moves. Slow under emulation; run it when the Orion pin moves, when a model fixture changes, and before a season that allows memory opens | Docker with emulation for the other platform; the network, the first time |
-| `docker compose up -d --build` | Builds this checkout and runs it as a runner | Docker and a Soma |
+| `../devops/tb dev runner up -d --build` | Builds this checkout and runs it as a runner | Docker and a Soma |
 | `ORION_ADMIN=… ORION_ADMIN_API_KEY=… ./scripts/load-package.sh [--prune]` | Shapes this role's package, compiles it and applies it into a running node; `--prune` retires what the applied version carried and this one does not. `--compile-only -o <file>` stops after compiling, which is what `entrypoint.sh` calls at boot | `orion-server` |
 
 - If the host's `orion-server` is older than 1.8, lint with the image's copy:
@@ -351,7 +352,7 @@ every statement a runner needs is a call to Soma's gate. The per-seat tasks are 
   build, and the digest is what makes the message say so. Regenerate the cases, then update the file.
 - A real match still needs a Soma: web's stack plus this runner. `tinybrains conform` re-runs a
   replay locally and diffs every field and every turn.
-- After any change, rebuild (`docker compose up -d --build`). A runner started from an older image
+- After any change, rebuild (`../devops/tb dev runner up -d --build`). A runner started from an older image
   is still running the old package.
 
 ## Releasing
@@ -406,8 +407,6 @@ docker/
                                applies it and holds /readyz until it serves)
   runner.toml.tmpl             the runner's Orion config
 Dockerfile                     the runner image: orion-server, the package, the engine from an ants release
-docker-compose.yml             one runner service, and `admit` under --profile admit
-docker-compose.prod.yml        the same runner for a production deployment
 .env.example                   a runner's settings
 .env.prod.example              a production runner's settings
 .github/workflows/release.yml  v* tag → ghcr.io/tiny-brains/kalam
