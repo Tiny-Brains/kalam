@@ -44,9 +44,13 @@ command -v orion-server > /dev/null || {
 echo "==> clippy (lint's gate, then the rules that need no config)"
 orion-server clippy . --deny-warnings
 
-# Over everything: every file here is authored and committed.
+# THE AUTHORED DEFINITIONS ONLY, NAMED. `fmt --check .` also walks `plugins/tb-ants/`, which is
+# gitignored and fetched from an ants release -- and neither `plugin.json` nor `cartridge.json` is
+# written in this style, so the gate failed on whatever the release happened to ship rather than on
+# anything this repository wrote. It passed on a laptop only because a `fmt` run had already
+# rewritten the fetched copies in place. The cartridge's formatting is ants' to own.
 echo "==> fmt"
-orion-server fmt --check .
+orion-server fmt --check channels connectors shared tests workflows
 
 # ---------------------------------------------------------------- the names and the tags
 # Orion checks that every reference RESOLVES; it has no opinion about what anything is CALLED, and
