@@ -139,83 +139,82 @@ else
   echo "==> $KALAM_SEAT_CONCURRENCY seat(s) of a match asked at once ($cpus core(s))"
 fi
 
-# ---------------------------------------------------------------- the widest board this node plays
-# THE DEADLINE IS THIS NODE'S CAPACITY, AND CAPACITY IS A DEPLOYMENT SETTING. Soma's claim hands a
-# row only to a runner whose match deadline covers turn_ms x max_turns x ceil(seats / seat
-# concurrency), plus a tenth -- so this number decides HOW WIDE A BOARD THIS MACHINE MAY PLAY, and
-# a number too small for a board does not slow that board down, it removes it from the ladder. At
-# one seat at a time and the cartridge's own 1000 ms x 1000 turns, a forty-minute deadline reaches
-# two seats and stops: every 3-to-8-seat board a season enables is then a row no replica ever
-# claims, and the season pairs what is left in silence. That is the whole of the bug this replaces.
+# ------------------------------------------------- what the season may ask, and this node must hold
+# A RUNNER DOES NOT PRESCRIBE THE MATCH. The season's rules and the board decide how long a turn is,
+# how many turns there are and how many seats play; this node's job is to be able to hold whatever
+# those rules allow. It used to be the other way round: the match channel's timeout, the seat task
+# list and the loop bound were fixed in the package, the claim priced every row against the timeout
+# this node reported, and a machine that was small quietly removed boards from the ladder -- the row
+# stayed pending for ever, pair skipped the board, and the season played its narrow ones in silence.
+# Nothing prices a row now (soma-gate-claim-claim.sql), so these three numbers are derived from what
+# the platform allows and a node that cannot cover them REFUSES TO BOOT rather than narrowing what a
+# season can run.
 #
-# SO IT IS DERIVED, from the envelope the cartridge publishes and the seats this node asks at once,
-# exactly as `slots` and `max_concurrency` are -- load-package.sh writes it into the match channel
-# the same way, and [vars] match_timeout_ms below reports the same number to Soma. Seats shorten it:
-# five at once play an eight-seat board in two batches, not eight.
+#   the seat list   the widest board the ENGINE allows (limits.boards), so a season may upload up to
+#                   the envelope and this node seats all of it
+#   the loop bound  the longest max_turns SOMA's rules allow, plus the sweeps that finish and report
+#   the timeout     no longer a bound on a match at all -- only on a WEDGE -- so it simply exceeds
+#                   the longest match those rules can declare: turn_ms ceiling x max_turns ceiling x
+#                   the batches this node makes of the widest board, plus a tenth
 #
-# RUNNER_MATCH_TIMEOUT_MS names it instead. That is how a node DECLINES the wide boards -- their
-# rows go to a runner that can hold them, and nothing is stuck -- in exchange for releasing a
-# crashed lane sooner, because a hung occurrence holds its slot until this deadline whatever the
-# match was doing. The two shutdown bounds follow it (below), so a restart still costs one match.
-if [ "$KALAM_ROLE" = admit ]; then
-  # AN ADMITTER HOLDS NO MATCH. The longest occurrence it can have is kalam-admit's own channel
-  # timeout, so its shutdown bounds follow that and there is no match deadline to derive: Soma
-  # stores whatever match_timeout_ms it reports on a row that `plays_matches` keeps out of every
-  # fit the claim and the pair clock check.
-  a_ms=$(tr -d ' \n' < "$PKG/shared/kalam.json" \
-         | sed -n 's/.*"admit_channel_config":{"timeout_ms":\([0-9][0-9]*\).*/\1/p')
-  s=$(( ${a_ms:-600000} / 1000 + 30 ))
-  ORION_SHUTDOWN_FORCE_SECS="${ORION_SHUTDOWN_FORCE_SECS:-$s}"
-  ORION_CRON_SHUTDOWN_SECS="${ORION_CRON_SHUTDOWN_SECS:-$s}"
-  export ORION_SHUTDOWN_FORCE_SECS ORION_CRON_SHUTDOWN_SECS
-  echo "==> an admission holds a worker at most $((${a_ms:-600000} / 1000)) s; draining stops at ${s} s"
-else
-  CART=""
-  for c in "$PKG"/plugins/*/cartridge.json; do
-    if [ -r "$c" ]; then CART="$c"; break; fi
-  done
-  c_turn= c_turns= c_seats=
-  if [ -n "$CART" ]; then
-    flat=$(tr -d ' \n' < "$CART")
-    c_turn=$(printf '%s' "$flat" | sed -n 's/.*"turn_ms":\([0-9][0-9]*\).*/\1/p')
-    c_turns=$(printf '%s' "$flat" | sed -n 's/.*"max_turns":\([0-9][0-9]*\).*/\1/p')
-    c_seats=$(printf '%s' "$flat" | sed -n 's/.*"boards":{[^}]*"players":\[[0-9][0-9]*,\([0-9][0-9]*\)\].*/\1/p')
-  fi
-  if [ -z "$c_turn" ] || [ -z "$c_turns" ] || [ -z "$c_seats" ]; then
-    # An engine from before `limits.boards`, or a cartridge this shell cannot read. Say so and leave
-    # the template's own fallback standing rather than deriving a deadline from a guess.
-    echo "==> WARNING: no limits.turn_ms/max_turns/boards in ${CART:-any cartridge under $PKG/plugins}; the match deadline falls back to runner.toml.tmpl's" >&2
-  else
-    # Ceiling division both times: the batches this node makes of the widest board, and the tenth the
-    # claim adds. One batch of the cartridge's own limits is turn_ms x max_turns.
-    batches=$(( (c_seats + KALAM_SEAT_CONCURRENCY - 1) / KALAM_SEAT_CONCURRENCY ))
-    needed=$(( (c_turn * c_turns * batches * 11 + 9) / 10 ))
-    KALAM_MATCH_TIMEOUT_MS="${RUNNER_MATCH_TIMEOUT_MS:-$needed}"
-    case "$KALAM_MATCH_TIMEOUT_MS" in
-      ''|*[!0-9]*) echo "RUNNER_MATCH_TIMEOUT_MS must be a whole number of milliseconds, got '$KALAM_MATCH_TIMEOUT_MS'" >&2; exit 1 ;;
-    esac
-    [ "$KALAM_MATCH_TIMEOUT_MS" -ge 1000 ] || { echo "RUNNER_MATCH_TIMEOUT_MS must be at least 1000 ms" >&2; exit 1; }
-    export KALAM_MATCH_TIMEOUT_MS
-    # What that deadline actually reaches, by the claim's own arithmetic rather than by the intent
-    # above: an operator who named a shorter one is owed the seat count it buys, not a promise.
-    reach=$(( KALAM_MATCH_TIMEOUT_MS * 10 / (c_turn * c_turns * 11) * KALAM_SEAT_CONCURRENCY ))
-    [ "$reach" -le "$c_seats" ] || reach=$c_seats
-    if [ "$reach" -lt 2 ]; then
-      echo "==> WARNING: a ${KALAM_MATCH_TIMEOUT_MS} ms deadline holds no board at all (${c_turn} ms x ${c_turns} turns, $KALAM_SEAT_CONCURRENCY seat(s) at once); this node will claim nothing" >&2
-    elif [ "$reach" -lt "$c_seats" ]; then
-      echo "==> WARNING: boards up to $reach seats, not the $c_seats the engine allows; wider boards go to another runner (raise RUNNER_SEAT_CONCURRENCY, or unset RUNNER_MATCH_TIMEOUT_MS)" >&2
-    fi
-    echo "==> boards up to $reach seats wide, ${KALAM_MATCH_TIMEOUT_MS} ms deadline (${c_turn} ms x ${c_turns} turns, $KALAM_SEAT_CONCURRENCY seat(s) at once)"
-    # THE SHUTDOWN BOUNDS FOLLOW THE DEADLINE, which is what makes "a shutdown costs one MATCH, not
-    # one timeout" still true when the deadline moves: the outer force bound and cron's inner one are
-    # equal, and both sit five minutes past the longest match this node can be holding. An operator
-    # who set either keeps it.
-    s=$(( KALAM_MATCH_TIMEOUT_MS / 1000 + 300 ))
-    ORION_SHUTDOWN_FORCE_SECS="${ORION_SHUTDOWN_FORCE_SECS:-$s}"
-    ORION_CRON_SHUTDOWN_SECS="${ORION_CRON_SHUTDOWN_SECS:-$s}"
-    export ORION_SHUTDOWN_FORCE_SECS ORION_CRON_SHUTDOWN_SECS
-  fi
+# THE TWO CEILINGS ARE SOMA'S, in season_rule_spec() (migrations/0001_init.sql); web's configs.sh
+# reads them out of that file and fails if these defaults disagree. They are not tuning knobs: a
+# deployment sets them only when soma's ceilings move ahead of this image.
+SEASON_TURN_MS_MAX="${SEASON_TURN_MS_MAX:-60000}"
+SEASON_MAX_TURNS_MAX="${SEASON_MAX_TURNS_MAX:-1000}"
+for v in SEASON_TURN_MS_MAX SEASON_MAX_TURNS_MAX; do
+  eval "n=\$$v"
+  case "$n" in ''|*[!0-9]*) echo "$v must be a whole number, got '$n'" >&2; exit 1 ;; esac
+  [ "$n" -ge 1 ] || { echo "$v must be at least 1, got '$n'" >&2; exit 1; }
+done
+
+CART=""
+for c in "$PKG"/plugins/*/cartridge.json; do
+  if [ -r "$c" ]; then CART="$c"; break; fi
+done
+c_seats=
+if [ -n "$CART" ]; then
+  c_seats=$(tr -d ' \n' < "$CART" \
+            | sed -n 's/.*"boards":{[^}]*"players":\[[0-9][0-9]*,\([0-9][0-9]*\)\].*/\1/p')
 fi
+if [ -z "$c_seats" ]; then
+  # An engine from before `limits.boards`, or a cartridge this shell cannot read. Nothing can be
+  # derived from a guess, and guessing is what this block exists to stop.
+  echo "no limits.boards in ${CART:-any cartridge under $PKG/plugins}: the widest board this engine allows is unknown, so the seat list and the wedge bound cannot be derived" >&2
+  exit 1
+fi
+
+# The seat list the per-seat tasks are written over, 0..top-1, in the JSON spelling the file uses.
+KALAM_SEATS=$(i=0; while [ "$i" -lt "$c_seats" ]; do
+  [ "$i" -gt 0 ] && printf ', '; printf '%s' "$i"; i=$((i + 1)); done)
+KALAM_LOOP_MAX=$((SEASON_MAX_TURNS_MAX + 10))
+
+if [ "$KALAM_ROLE" = admit ]; then
+  # An admitter plays no match: it seats nothing and loops over observations, not turns. It keeps
+  # the package's committed numbers, and kalam-admit's own channel timeout is its bound.
+  KALAM_SEATS= KALAM_LOOP_MAX=
+  export KALAM_SEATS KALAM_LOOP_MAX
+else
+  # Ceiling division twice: the batches this node makes of the widest board, and the tenth the old
+  # claim added for the steps and the gate calls, which is still the right slack for a wedge bound.
+  batches=$(( (c_seats + KALAM_SEAT_CONCURRENCY - 1) / KALAM_SEAT_CONCURRENCY ))
+  needed=$(( (SEASON_TURN_MS_MAX * SEASON_MAX_TURNS_MAX * batches * 11 + 9) / 10 ))
+  KALAM_MATCH_TIMEOUT_MS="${RUNNER_MATCH_TIMEOUT_MS:-$needed}"
+  case "$KALAM_MATCH_TIMEOUT_MS" in
+    ''|*[!0-9]*) echo "RUNNER_MATCH_TIMEOUT_MS must be a whole number of milliseconds, got '$KALAM_MATCH_TIMEOUT_MS'" >&2; exit 1 ;;
+  esac
+  # A LOWER ONE IS REFUSED, not accepted quietly. A node whose occurrence bound is shorter than the
+  # longest match the rules allow would claim such a row -- nothing filters any more -- and then be
+  # killed mid-match, and the row would fail LEASE_LAPSED at the third reap having been played by
+  # nobody. Raising it is allowed; shrinking the ladder from a runner is not.
+  if [ "$KALAM_MATCH_TIMEOUT_MS" -lt "$needed" ]; then
+    echo "RUNNER_MATCH_TIMEOUT_MS=$KALAM_MATCH_TIMEOUT_MS is below the $needed ms this node must be able to hold: ${SEASON_TURN_MS_MAX} ms x ${SEASON_MAX_TURNS_MAX} turns x $batches batch(es) of a ${c_seats}-seat board, plus a tenth. Raise it, give the node more seats at once (RUNNER_SEAT_CONCURRENCY, fewer RUNNER_CRON_WORKERS), or leave it unset to take the derived value" >&2
+    exit 1
+  fi
+  export KALAM_SEATS KALAM_LOOP_MAX KALAM_MATCH_TIMEOUT_MS
+  echo "==> seats any board up to $c_seats, turns up to $SEASON_MAX_TURNS_MAX, and holds a wedged occurrence ${KALAM_MATCH_TIMEOUT_MS} ms (${SEASON_TURN_MS_MAX} ms x ${SEASON_MAX_TURNS_MAX} turns x $batches batch(es))"
+fi
+
 export KALAM_ROLE KALAM_MATCH_LANES KALAM_ADMIT_LANES KALAM_CRON_WORKERS KALAM_SEAT_CONCURRENCY
 
 # No `migrate` step: [storage] auto_migrate is on in runner.toml.tmpl, so the server migrates its
@@ -236,6 +235,7 @@ export KALAM_ARTIFACT="$ARTIFACT"
 KALAM_ROLE="$KALAM_ROLE" KALAM_MATCH_LANES="$KALAM_MATCH_LANES" \
   KALAM_SEAT_CONCURRENCY="${KALAM_SEAT_CONCURRENCY:-}" \
   KALAM_MATCH_TIMEOUT_MS="${KALAM_MATCH_TIMEOUT_MS:-}" \
+  KALAM_SEATS="${KALAM_SEATS:-}" KALAM_LOOP_MAX="${KALAM_LOOP_MAX:-}" \
   sh "$PKG/scripts/load-package.sh" --compile-only -o "$ARTIFACT" > /dev/null
 
 echo "==> starting orion-server with $CFG"

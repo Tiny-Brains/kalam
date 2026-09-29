@@ -25,12 +25,15 @@ port = 8080
 #
 # drain is an unconditional FIXED sleep and buys a routeless node nothing; force is the REAL outer
 # bound on a draining match, because the cron worker is a supervised task and the server key is its
-# deadline. A shutdown costs one MATCH, not one timeout -- which stays true only while this bound
-# sits past the longest match the node may be holding, so entrypoint.sh derives it as the match
-# deadline plus five minutes whenever ORION_SHUTDOWN_FORCE_SECS does not name it. The fallback here
-# is that rule at the fallback deadline above.
+# deadline. A shutdown costs one MATCH, not one timeout.
+#
+# IT DOES NOT FOLLOW THE MATCH CHANNEL'S TIMEOUT, and must not: that number is a bound on a WEDGE,
+# sized to exceed the longest match soma's rules can declare, and waiting days for a restart would
+# be absurd. A drain cut short is not a lost result either -- the claim is simply not renewed, the
+# lease lapses, and the row is claimed and replayed by whoever takes it next. This is an operational
+# number: how long a restart waits for the match in hand.
 shutdown_drain_secs         = ${ORION_SHUTDOWN_DRAIN_SECS:-5}
-shutdown_force_timeout_secs = ${ORION_SHUTDOWN_FORCE_SECS:-9100}
+shutdown_force_timeout_secs = ${ORION_SHUTDOWN_FORCE_SECS:-2700}
 
 # DISPOSABLE, AND GONE ON EVERY START. The state holds the loaded package, this node's model
 # registrations and a few hours of run records, and everything that matters is in a Postgres this
@@ -106,22 +109,21 @@ admit_slots = ${KALAM_ADMIT_LANES:-0}
 # scripts/check/configs.sh checks the two against each other and against Soma's.
 ops_budget = 1000000
 
-# THE LONGEST MATCH THIS NODE CAN HOLD, and how many seats it asks at once, reported at every token
-# exchange: Soma's claim hands a row only to a runner whose timeout covers the row's turn_ms x
-# max_turns x ceil(seats / seat_concurrency) plus a tenth. So this pair is not a safety margin, it
-# is THE WIDEST BOARD THIS NODE PLAYS -- at one seat at a time and the cartridge's 1000 ms x 1000
-# turns, a forty-minute timeout reaches two seats and no more, and a season's 3-to-8-seat boards are
-# then rows nothing ever claims. entrypoint.sh derives both from the cartridge's own envelope so
-# that every board it allows fits, and RUNNER_MATCH_TIMEOUT_MS overrides the first; the fallbacks
-# here are the widest board at one seat at a time, so a node that somehow reaches neither still
-# plays the whole envelope. A shorter timeout is a node DECLINING the wide boards, which costs
-# nothing -- their rows go to a runner that can hold them -- and releases a crashed lane sooner.
+# WHAT THIS NODE SAYS ABOUT ITSELF, AND NOTHING PRICES A MATCH AGAINST IT. Both are reported at
+# every token exchange for the Runners screen and for an operator reading a row. The claim once
+# refused a row whose turn_ms x max_turns x ceil(seats / seat_concurrency) did not fit inside the
+# first of them, and that was a runner prescribing the match: a small machine did not play a wide
+# board slowly, it removed the board from the ladder. A season's rules and its boards decide what a
+# match is; this node is sized to hold whatever they allow (entrypoint.sh, which refuses to boot
+# when it cannot) and reports these two as facts.
 #
-# match_timeout_ms MUST EQUAL the match channel's timeout_ms in the package this node applied
-# (web's scripts/check/configs.sh checks the committed pair, and load-package.sh writes the derived
-# number into both); seat_concurrency is what entrypoint.sh derived (cores / lanes) or
-# RUNNER_SEAT_CONCURRENCY, the same number load-package.sh writes into `infer`'s max_concurrency.
-match_timeout_ms = ${KALAM_MATCH_TIMEOUT_MS:-8800000}
+# match_timeout_ms is the longest OCCURRENCE this node holds -- a bound on a wedge, not on a match --
+# and MUST EQUAL the match channel's timeout_ms in the package this node applied: load-package.sh
+# writes the derived number into the channel and this reports it, and web's configs.sh checks the
+# committed pair. seat_concurrency is what entrypoint.sh derived (cores / lanes) or
+# RUNNER_SEAT_CONCURRENCY, the same number load-package.sh writes into `infer`'s max_concurrency;
+# it decides how FAST a wide board is played, and no longer whether it is played at all.
+match_timeout_ms = ${KALAM_MATCH_TIMEOUT_MS:-528000000}
 seat_concurrency = ${KALAM_SEAT_CONCURRENCY:-1}
 
 # NO poll_secs. One was carried here once and NOTHING READ IT -- the poll rate is the cron
@@ -243,8 +245,8 @@ device = "cpu"
 
 [cron]
 # The INNER deadline on a draining match; shutdown_force_timeout_secs above is the outer one. Equal
-# to it, so neither surprises -- entrypoint.sh sets both to the match deadline plus five minutes.
-shutdown_timeout_secs = ${ORION_CRON_SHUTDOWN_SECS:-9100}
+# to it, so neither surprises.
+shutdown_timeout_secs = ${ORION_CRON_SHUTDOWN_SECS:-2700}
 
 # THE MATCH LANES AND ONE MORE, FOR THE ROSTER -- or, on an admitting runner, one: kalam-admit's.
 # RUNNER_CRON_WORKERS is how many matches this machine plays at once, and entrypoint.sh loads exactly

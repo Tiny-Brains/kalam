@@ -128,17 +128,17 @@ services:
 
       ORION_VERSION: ${ORION_VERSION:-1.11.1}
       # A draining match is worth waiting for: it is a real result that is otherwise replayed from
-      # scratch by whoever claims the row next. EMPTY ON PURPOSE: the entrypoint sets both to the
-      # match deadline it derived plus five minutes, and a number typed here would hold a drain
-      # shorter than the longest match this node can be playing.
+      # scratch by whoever claims the row next. Deliberately NOT the match channel's timeout, which
+      # is a bound on a wedge sized past the longest match the rules allow -- waiting days for a
+      # restart would be absurd, and a cut drain loses no result.
       ORION_SHUTDOWN_DRAIN_SECS: ${RUNNER_SHUTDOWN_DRAIN_SECS:-5}
-      ORION_SHUTDOWN_FORCE_SECS: ${RUNNER_SHUTDOWN_FORCE_SECS:-}
-      ORION_CRON_SHUTDOWN_SECS: ${RUNNER_CRON_SHUTDOWN_SECS:-}
+      ORION_SHUTDOWN_FORCE_SECS: ${RUNNER_SHUTDOWN_FORCE_SECS:-2700}
+      ORION_CRON_SHUTDOWN_SECS: ${RUNNER_CRON_SHUTDOWN_SECS:-2700}
       RUNNER_CRON_WORKERS: ${RUNNER_CRON_WORKERS:-2}
       RUNNER_SEAT_CONCURRENCY: ${RUNNER_SEAT_CONCURRENCY:-}
-      # THE WIDEST BOARD THIS NODE PLAYS. Empty derives it from the engine's own envelope, so every
-      # board a season can enable is claimable here; a number declines the wide ones (their rows go
-      # to a runner that can hold them) and frees a crashed lane sooner. The boot line says which.
+      # THE LONGEST WEDGED OCCURRENCE THIS NODE HOLDS, not a limit on any match: the entrypoint
+      # derives it to exceed the longest match soma's rules can declare, and REFUSES A LOWER ONE --
+      # a runner does not shrink the ladder. Raising it is allowed. The boot line says the number.
       RUNNER_MATCH_TIMEOUT_MS: ${RUNNER_MATCH_TIMEOUT_MS:-}
       RUNNER_MAX_CACHE_BYTES: ${RUNNER_MAX_CACHE_BYTES:-4294967296}
       RUNNER_MAX_LOADED_BYTES: ${RUNNER_MAX_LOADED_BYTES:-2147483648}
@@ -147,11 +147,8 @@ services:
       MALLOC_ARENA_MAX: ${MALLOC_ARENA_MAX:-2}
 
     # Must exceed drain + force, or Docker SIGKILLs the drain and leaves rows `running` with a live
-    # lease and no error anywhere -- a wedged match that only the reap clock will ever free. Force
-    # is the match deadline plus five minutes and the deadline is derived at boot, so this is the
-    # widest case (one seat at a time, the widest board); it is a CEILING on the wait, reached only
-    # by a match that never ends, and RUNNER_MATCH_TIMEOUT_MS shortens all three together.
-    stop_grace_period: ${RUNNER_STOP_GRACE:-9160s}
+    # lease and no error anywhere -- a wedged match that only the reap clock will ever free.
+    stop_grace_period: ${RUNNER_STOP_GRACE:-2760s}
 
     # LOOPBACK ONLY, and only because an operator may want to read /health or /metrics. A runner binds
     # no route, it makes calls. Publishing 8080 would publish this machine's admin plane. 8090 by

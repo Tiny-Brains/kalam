@@ -90,7 +90,7 @@
             "method": "POST",
             "path": "/v1/runner/claim",
             "headers": { "Authorization": { "cat": ["Bearer ", { "var": "data.tok.token" }] } },
-            "body": { "engine_digest": { "var": "metadata.vars.engine_digest" }, "seat_count": 8 },
+            "body": { "engine_digest": { "var": "metadata.vars.engine_digest" } },
             "output": "temp_data.cl"
           }
         }
@@ -726,427 +726,59 @@
                   }
                 },
                 {
-                  "path": "temp_data.t.a0",
-                  "logic": {
-                    "if": [
-                      {
-                        "!": {
-                          "and": [
-                            { ">": [{ "var": "temp_data.t.n_live" }, 0] },
-                            { ">": [{ "var": "data.row.seat_count" }, 0] },
-                            { "!": { "var": "data.f0" } },
-                            { "!!": [{ "var": "temp_data.t.v0.mine" }] }
+                  "$each": { "seat": { "$from": "constants.seats" } },
+                  "do": {
+                    "path": "temp_data.t.a{{seat}}",
+                    "logic": {
+                      "if": [
+                        {
+                          "!": {
+                            "and": [
+                              { ">": [{ "var": "temp_data.t.n_live" }, 0] },
+                              { ">": [{ "var": "data.row.seat_count" }, { "$param": "seat" }] },
+                              { "!": { "var": "data.f{{seat}}" } },
+                              { "!!": [{ "var": "temp_data.t.v{{seat}}.mine" }] }
+                            ]
+                          }
+                        },
+                        null,
+                        {
+                          "map": [
+                            {
+                              "reduce": [
+                                {
+                                  "if": [
+                                    { "var": "temp_data.t.v{{seat}}.mine" },
+                                    { "var": "temp_data.t.v{{seat}}.mine" },
+                                    []
+                                  ]
+                                },
+                                {
+                                  "merge": [
+                                    { "var": "accumulator" },
+                                    [
+                                      {
+                                        "+": [
+                                          {
+                                            "*": [
+                                              { "val": [[1], "temp_data", "t", "w"] },
+                                              { "var": "current.0" }
+                                            ]
+                                          },
+                                          { "var": "current.1" }
+                                        ]
+                                      }
+                                    ]
+                                  ]
+                                },
+                                []
+                              ]
+                            },
+                            { "var": "" }
                           ]
                         }
-                      },
-                      null,
-                      {
-                        "map": [
-                          {
-                            "reduce": [
-                              {
-                                "if": [
-                                  { "var": "temp_data.t.v0.mine" },
-                                  { "var": "temp_data.t.v0.mine" },
-                                  []
-                                ]
-                              },
-                              {
-                                "merge": [
-                                  { "var": "accumulator" },
-                                  [
-                                    {
-                                      "+": [
-                                        {
-                                          "*": [
-                                            { "val": [[1], "temp_data", "t", "w"] },
-                                            { "var": "current.0" }
-                                          ]
-                                        },
-                                        { "var": "current.1" }
-                                      ]
-                                    }
-                                  ]
-                                ]
-                              },
-                              []
-                            ]
-                          },
-                          { "var": "" }
-                        ]
-                      }
-                    ]
-                  }
-                },
-                {
-                  "path": "temp_data.t.a1",
-                  "logic": {
-                    "if": [
-                      {
-                        "!": {
-                          "and": [
-                            { ">": [{ "var": "temp_data.t.n_live" }, 0] },
-                            { ">": [{ "var": "data.row.seat_count" }, 1] },
-                            { "!": { "var": "data.f1" } },
-                            { "!!": [{ "var": "temp_data.t.v1.mine" }] }
-                          ]
-                        }
-                      },
-                      null,
-                      {
-                        "map": [
-                          {
-                            "reduce": [
-                              {
-                                "if": [
-                                  { "var": "temp_data.t.v1.mine" },
-                                  { "var": "temp_data.t.v1.mine" },
-                                  []
-                                ]
-                              },
-                              {
-                                "merge": [
-                                  { "var": "accumulator" },
-                                  [
-                                    {
-                                      "+": [
-                                        {
-                                          "*": [
-                                            { "val": [[1], "temp_data", "t", "w"] },
-                                            { "var": "current.0" }
-                                          ]
-                                        },
-                                        { "var": "current.1" }
-                                      ]
-                                    }
-                                  ]
-                                ]
-                              },
-                              []
-                            ]
-                          },
-                          { "var": "" }
-                        ]
-                      }
-                    ]
-                  }
-                },
-                {
-                  "path": "temp_data.t.a2",
-                  "logic": {
-                    "if": [
-                      {
-                        "!": {
-                          "and": [
-                            { ">": [{ "var": "temp_data.t.n_live" }, 0] },
-                            { ">": [{ "var": "data.row.seat_count" }, 2] },
-                            { "!": { "var": "data.f2" } },
-                            { "!!": [{ "var": "temp_data.t.v2.mine" }] }
-                          ]
-                        }
-                      },
-                      null,
-                      {
-                        "map": [
-                          {
-                            "reduce": [
-                              {
-                                "if": [
-                                  { "var": "temp_data.t.v2.mine" },
-                                  { "var": "temp_data.t.v2.mine" },
-                                  []
-                                ]
-                              },
-                              {
-                                "merge": [
-                                  { "var": "accumulator" },
-                                  [
-                                    {
-                                      "+": [
-                                        {
-                                          "*": [
-                                            { "val": [[1], "temp_data", "t", "w"] },
-                                            { "var": "current.0" }
-                                          ]
-                                        },
-                                        { "var": "current.1" }
-                                      ]
-                                    }
-                                  ]
-                                ]
-                              },
-                              []
-                            ]
-                          },
-                          { "var": "" }
-                        ]
-                      }
-                    ]
-                  }
-                },
-                {
-                  "path": "temp_data.t.a3",
-                  "logic": {
-                    "if": [
-                      {
-                        "!": {
-                          "and": [
-                            { ">": [{ "var": "temp_data.t.n_live" }, 0] },
-                            { ">": [{ "var": "data.row.seat_count" }, 3] },
-                            { "!": { "var": "data.f3" } },
-                            { "!!": [{ "var": "temp_data.t.v3.mine" }] }
-                          ]
-                        }
-                      },
-                      null,
-                      {
-                        "map": [
-                          {
-                            "reduce": [
-                              {
-                                "if": [
-                                  { "var": "temp_data.t.v3.mine" },
-                                  { "var": "temp_data.t.v3.mine" },
-                                  []
-                                ]
-                              },
-                              {
-                                "merge": [
-                                  { "var": "accumulator" },
-                                  [
-                                    {
-                                      "+": [
-                                        {
-                                          "*": [
-                                            { "val": [[1], "temp_data", "t", "w"] },
-                                            { "var": "current.0" }
-                                          ]
-                                        },
-                                        { "var": "current.1" }
-                                      ]
-                                    }
-                                  ]
-                                ]
-                              },
-                              []
-                            ]
-                          },
-                          { "var": "" }
-                        ]
-                      }
-                    ]
-                  }
-                },
-                {
-                  "path": "temp_data.t.a4",
-                  "logic": {
-                    "if": [
-                      {
-                        "!": {
-                          "and": [
-                            { ">": [{ "var": "temp_data.t.n_live" }, 0] },
-                            { ">": [{ "var": "data.row.seat_count" }, 4] },
-                            { "!": { "var": "data.f4" } },
-                            { "!!": [{ "var": "temp_data.t.v4.mine" }] }
-                          ]
-                        }
-                      },
-                      null,
-                      {
-                        "map": [
-                          {
-                            "reduce": [
-                              {
-                                "if": [
-                                  { "var": "temp_data.t.v4.mine" },
-                                  { "var": "temp_data.t.v4.mine" },
-                                  []
-                                ]
-                              },
-                              {
-                                "merge": [
-                                  { "var": "accumulator" },
-                                  [
-                                    {
-                                      "+": [
-                                        {
-                                          "*": [
-                                            { "val": [[1], "temp_data", "t", "w"] },
-                                            { "var": "current.0" }
-                                          ]
-                                        },
-                                        { "var": "current.1" }
-                                      ]
-                                    }
-                                  ]
-                                ]
-                              },
-                              []
-                            ]
-                          },
-                          { "var": "" }
-                        ]
-                      }
-                    ]
-                  }
-                },
-                {
-                  "path": "temp_data.t.a5",
-                  "logic": {
-                    "if": [
-                      {
-                        "!": {
-                          "and": [
-                            { ">": [{ "var": "temp_data.t.n_live" }, 0] },
-                            { ">": [{ "var": "data.row.seat_count" }, 5] },
-                            { "!": { "var": "data.f5" } },
-                            { "!!": [{ "var": "temp_data.t.v5.mine" }] }
-                          ]
-                        }
-                      },
-                      null,
-                      {
-                        "map": [
-                          {
-                            "reduce": [
-                              {
-                                "if": [
-                                  { "var": "temp_data.t.v5.mine" },
-                                  { "var": "temp_data.t.v5.mine" },
-                                  []
-                                ]
-                              },
-                              {
-                                "merge": [
-                                  { "var": "accumulator" },
-                                  [
-                                    {
-                                      "+": [
-                                        {
-                                          "*": [
-                                            { "val": [[1], "temp_data", "t", "w"] },
-                                            { "var": "current.0" }
-                                          ]
-                                        },
-                                        { "var": "current.1" }
-                                      ]
-                                    }
-                                  ]
-                                ]
-                              },
-                              []
-                            ]
-                          },
-                          { "var": "" }
-                        ]
-                      }
-                    ]
-                  }
-                },
-                {
-                  "path": "temp_data.t.a6",
-                  "logic": {
-                    "if": [
-                      {
-                        "!": {
-                          "and": [
-                            { ">": [{ "var": "temp_data.t.n_live" }, 0] },
-                            { ">": [{ "var": "data.row.seat_count" }, 6] },
-                            { "!": { "var": "data.f6" } },
-                            { "!!": [{ "var": "temp_data.t.v6.mine" }] }
-                          ]
-                        }
-                      },
-                      null,
-                      {
-                        "map": [
-                          {
-                            "reduce": [
-                              {
-                                "if": [
-                                  { "var": "temp_data.t.v6.mine" },
-                                  { "var": "temp_data.t.v6.mine" },
-                                  []
-                                ]
-                              },
-                              {
-                                "merge": [
-                                  { "var": "accumulator" },
-                                  [
-                                    {
-                                      "+": [
-                                        {
-                                          "*": [
-                                            { "val": [[1], "temp_data", "t", "w"] },
-                                            { "var": "current.0" }
-                                          ]
-                                        },
-                                        { "var": "current.1" }
-                                      ]
-                                    }
-                                  ]
-                                ]
-                              },
-                              []
-                            ]
-                          },
-                          { "var": "" }
-                        ]
-                      }
-                    ]
-                  }
-                },
-                {
-                  "path": "temp_data.t.a7",
-                  "logic": {
-                    "if": [
-                      {
-                        "!": {
-                          "and": [
-                            { ">": [{ "var": "temp_data.t.n_live" }, 0] },
-                            { ">": [{ "var": "data.row.seat_count" }, 7] },
-                            { "!": { "var": "data.f7" } },
-                            { "!!": [{ "var": "temp_data.t.v7.mine" }] }
-                          ]
-                        }
-                      },
-                      null,
-                      {
-                        "map": [
-                          {
-                            "reduce": [
-                              {
-                                "if": [
-                                  { "var": "temp_data.t.v7.mine" },
-                                  { "var": "temp_data.t.v7.mine" },
-                                  []
-                                ]
-                              },
-                              {
-                                "merge": [
-                                  { "var": "accumulator" },
-                                  [
-                                    {
-                                      "+": [
-                                        {
-                                          "*": [
-                                            { "val": [[1], "temp_data", "t", "w"] },
-                                            { "var": "current.0" }
-                                          ]
-                                        },
-                                        { "var": "current.1" }
-                                      ]
-                                    }
-                                  ]
-                                ]
-                              },
-                              []
-                            ]
-                          },
-                          { "var": "" }
-                        ]
-                      }
-                    ]
+                      ]
+                    }
                   }
                 },
                 {

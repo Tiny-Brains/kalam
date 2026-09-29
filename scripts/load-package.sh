@@ -39,7 +39,9 @@
 #   KALAM_ROLE              match (default) or admit
 #   KALAM_MATCH_LANES       matches at once, as the match channel's slots (unset keeps the committed 4)
 #   KALAM_SEAT_CONCURRENCY  seats one match asks at once, as `infer`'s for_each max_concurrency
-#   KALAM_MATCH_TIMEOUT_MS  the longest match this node holds, as the match channel's timeout_ms
+#   KALAM_MATCH_TIMEOUT_MS  the longest OCCURRENCE this node holds, as the match channel's timeout_ms
+#   KALAM_SEATS             the engine's widest board, as `constants.seats` (0..top-1)
+#   KALAM_LOOP_MAX          soma's max_turns ceiling plus a tail, as the match loop's `max`
 #                           (unset keeps the shipped 1: one seat at a time)
 #
 # Everything a deployment varies is read by the definitions and the instance config: the platform's
@@ -96,19 +98,45 @@ else
     grep -q "\"slots\": $KALAM_MATCH_LANES" "$ch" || {
       echo "could not set the match channel to $KALAM_MATCH_LANES slot(s)" >&2; exit 1; }
   fi
+  # THE THREE NUMBERS THAT MUST NOT BE A LIMIT ON WHAT A SEASON MAY RUN. A runner does not
+  # prescribe the match: the season's rules and the board do, and every one of these is therefore
+  # derived from the engine's own envelope or soma's own rule ceilings (entrypoint.sh computes them
+  # and refuses to boot when they cannot be covered). They are package literals because Orion takes
+  # a loop bound, a fan-out width and a channel timeout as authoring decisions -- which is exactly
+  # why they are written here and not left at the committed default.
   if [ -n "${KALAM_MATCH_TIMEOUT_MS:-}" ]; then
-    # THE THIRD CAPACITY LITERAL, and the one that used to be a release. The match channel's
-    # `timeout_ms` is the longest match this node can hold, and Soma's claim reads the same number
-    # off the runner's row: leave it at the committed default on a node that asks one seat at a
-    # time and every board wider than two seats is a row this replica never claims. It lives in
-    # shared/kalam.json's constants, where `match_channel_config` is the first of three timeouts --
-    # the admitter's and the roster's follow it and are not this -- so the substitution is anchored
-    # on that key and the line after it, like `max_concurrency` below.
+    # The longest OCCURRENCE this node may hold. It is no longer a bound on a match -- nothing
+    # prices a row against it any more -- only on a wedge, so it must simply exceed the longest
+    # match soma's rules can declare. It lives in shared/kalam.json's constants, where
+    # `match_channel_config` is the first of three timeouts (the admitter's and the roster's follow
+    # it and are not this), so the substitution is anchored on that key and the line after it.
     kj="$SET/shared/kalam.json"
     sed "/\"match_channel_config\": {/{n;s/\"timeout_ms\": [0-9][0-9]*/\"timeout_ms\": $KALAM_MATCH_TIMEOUT_MS/;}" \
       "$kj" > "$kj.tmp" && mv "$kj.tmp" "$kj"
     grep -A1 '"match_channel_config": {' "$kj" | grep -q "\"timeout_ms\": $KALAM_MATCH_TIMEOUT_MS" || {
       echo "could not set the match channel's timeout to $KALAM_MATCH_TIMEOUT_MS ms" >&2; exit 1; }
+  fi
+  if [ -n "${KALAM_SEATS:-}" ]; then
+    # THE SEAT WIDTH IS THE ENGINE'S, NOT KALAM'S. `constants.seats` is the list the per-seat tasks
+    # are written over once, so its length is the widest board this node can play -- and a board
+    # wider than it is a row claimed and then mis-seated. The engine's `limits.boards` is what a
+    # season may upload up to, so that top is this list: 0..top-1, on one line as the file has it.
+    kj="$SET/shared/kalam.json"
+    sed "s/^\( *\)\"seats\": \[[0-9, ]*\]/\1\"seats\": [$KALAM_SEATS]/" "$kj" > "$kj.tmp" \
+      && mv "$kj.tmp" "$kj"
+    grep -q "\"seats\": \[$KALAM_SEATS\]" "$kj" || {
+      echo "could not set the seat list to [$KALAM_SEATS]" >&2; exit 1; }
+  fi
+  if [ -n "${KALAM_LOOP_MAX:-}" ]; then
+    # THE TURN BOUND IS SOMA'S CEILING, PLUS A TAIL. The loop's `max` is a bound and not the
+    # terminator (a rejected filter ends every run here), but a match longer than it could never
+    # finish -- so it is the longest `execution.max_turns` a season may declare, plus the sweeps
+    # that finish and report. It is the first `"max"` in the file, inside `"loop"`.
+    wf="$SET/workflows/kalam-match-run.json"
+    sed "/^  \"loop\": {/,/^  }/{s/\"max\": [0-9][0-9]*/\"max\": $KALAM_LOOP_MAX/;}" "$wf" \
+      > "$wf.tmp" && mv "$wf.tmp" "$wf"
+    sed -n '/^  "loop": {/,/^  }/p' "$wf" | grep -q "\"max\": $KALAM_LOOP_MAX" || {
+      echo "could not set the match loop's bound to $KALAM_LOOP_MAX sweeps" >&2; exit 1; }
   fi
   if [ -n "${KALAM_SEAT_CONCURRENCY:-}" ]; then
     # `max_concurrency` is a literal too. It is the line after `"as": "sv"`, the fan-out of one

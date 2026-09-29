@@ -90,21 +90,31 @@ here — which is the right way round: the starter's models are the source of tr
   stores it on the runner's row, which caps how many matches the claim hands this runner. An
   admitting runner sends `null`, which leaves its row alone. It also sends `match_timeout_ms` (the
   match channel's `timeout_ms`, typed once more under `[vars]`; configs.sh keeps them equal) and
-  `seat_concurrency`, and Soma's claim hands this runner only a row whose turn_ms × max_turns × seat
-  batches, plus a tenth, fit inside that timeout.
-- **That timeout is the widest board this node plays, and it is derived.** A row no live runner can
-  hold is not re-claimed for ever — it is never claimed at all, and waits pending while the pair
-  clock skips its board, which is the failure that looks like an idle ladder. At one seat at a time
-  and the cartridge's 1000 ms × 1000 turns, a forty-minute timeout reaches **two seats**, so a
-  fixed one silently drops every 3-to-8-seat board a season enables. `entrypoint.sh` therefore sizes
-  it from the cartridge's own `limits` — `turn_ms × max_turns × ceil(limits.boards top ÷ seats) ×
-  1.1` — and `load-package.sh` writes it into the match channel's `timeout_ms` as the third
-  capacity literal, beside `slots` and `max_concurrency`. Seats shorten it; `RUNNER_MATCH_TIMEOUT_MS`
-  names it instead, which is how a node declines the wide boards and frees a crashed lane sooner.
-  **The shutdown bounds follow it** (the deadline plus five minutes, an admitter's from
-  `kalam-admit`'s timeout), so "a shutdown costs one MATCH, not one timeout" survives the move.
-  web's `configs.sh` prices the committed fallbacks against the envelope and fails if they fall
-  short.
+  `seat_concurrency`. **Nothing prices a match against either.** They are facts on the row, for the
+  Runners screen and for an operator; no decision reads them.
+- **A RUNNER DOES NOT PRESCRIBE THE MATCH.** The season's rules and the board say how long a turn
+  is, how many turns there are and how many seats play; this node's only job is to be able to hold
+  whatever they allow. The claim used to price each row against the timeout a runner reported, and
+  that inverted it: a small machine did not play a wide board slowly, it **removed the board from
+  the ladder** — the row stayed pending for ever (the reap only touches claimed and running), pair
+  skipped the board, and the season played its narrow ones in silence. At one seat at a time and
+  1000 ms × 1000 turns, a forty-minute timeout reached two seats. So three numbers that were fixed
+  in the package are now **derived, and a node that cannot cover them refuses to boot**:
+  - **the seat list** (`constants.seats`) is the engine's `limits.boards` top, so a season may
+    upload up to the envelope and this node seats all of it. The per-seat tasks are written once
+    under `$each` with `{{seat}}` — never eight copies again, which is what made the width Kalam's
+    opinion instead of the engine's.
+  - **the loop bound** is the longest `execution.max_turns` soma's rules allow, plus the sweeps that
+    finish and report.
+  - **the match channel's `timeout_ms`** is no longer a bound on a match at all, only on a **wedge**:
+    it exceeds the longest match those rules can declare (`turn_ms` ceiling × `max_turns` ceiling ×
+    the batches this node makes of the widest board, plus a tenth). `RUNNER_MATCH_TIMEOUT_MS` may
+    raise it and **a lower value is refused** — shrinking the ladder from a runner is the bug.
+  `load-package.sh` writes all three, as it writes `slots` and `max_concurrency`; the two ceilings
+  are soma's, in `season_rule_spec()`, and web's `configs.sh` reads them out of that migration and
+  fails if this image's defaults have gone stale. **The shutdown bounds do NOT follow the wedge
+  bound** — they are how long a restart waits for the match in hand, and a cut drain loses no result:
+  the lease lapses and the row is replayed by whoever claims it next.
 - **A gate route's request field names are the contract**, not the column names. `finish` binds `data.req.result` and `data.req.engine_digest`. Send other names
   and the route binds nulls and answers `409 claim_lost`. Run `grep data.req.` in the route before
   changing a request body here.
@@ -174,8 +184,8 @@ here — which is the right way round: the starter's models are the source of tr
   `entrypoint.sh` derives as cores ÷ slots unless `RUNNER_SEAT_CONCURRENCY` names it. Each call's
   deadline runs from the moment it asks, **the wait for Orion's inference permit included**, and
   there is one permit per core — so slots × seats above the cores strikes seats for the node's load.
-  The same number divides a board into batches for the match deadline above, so fewer lanes with
-  more seats is what plays a wide board on a small machine.
+  It decides how FAST a wide board is played and never whether it is played: it divides the board
+  into batches for the wedge bound above, and a smaller number only makes that bound longer.
   The admission probe asks one inference a sweep: it measures each alone.
 - **The board rides the claim.** The row carries `map` whole, and `world` passes it to `worldgen`,
   because the component carries no boards. `K_ROW` joins `season_maps` exactly as the gate's claim

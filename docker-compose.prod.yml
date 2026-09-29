@@ -92,17 +92,18 @@ services:
       RUST_LOG: ${ORION_RUST_LOG:-info,dataflow_rs::engine::workflow_executor=warn,dataflow_rs::engine::functions::filter=warn,orion::server::observability=warn,orion::cron::worker=warn}
 
       ORION_VERSION: ${ORION_VERSION:-1.11.1}
-      # EMPTY ON PURPOSE: the entrypoint sets both to the match deadline it derived plus five
-      # minutes, and a number typed here would hold a drain shorter than the longest match this
-      # node can be playing.
+      # HOW LONG A RESTART WAITS for the match in hand, and deliberately NOT the match channel's
+      # timeout: that is a bound on a wedge, sized past the longest match the rules allow, and
+      # waiting days for a restart would be absurd. A cut drain loses no result -- the lease lapses
+      # and the row is replayed by whoever claims it next.
       ORION_SHUTDOWN_DRAIN_SECS: ${RUNNER_SHUTDOWN_DRAIN_SECS:-5}
-      ORION_SHUTDOWN_FORCE_SECS: ${RUNNER_SHUTDOWN_FORCE_SECS:-}
-      ORION_CRON_SHUTDOWN_SECS: ${RUNNER_CRON_SHUTDOWN_SECS:-}
+      ORION_SHUTDOWN_FORCE_SECS: ${RUNNER_SHUTDOWN_FORCE_SECS:-2700}
+      ORION_CRON_SHUTDOWN_SECS: ${RUNNER_CRON_SHUTDOWN_SECS:-2700}
       RUNNER_CRON_WORKERS: ${RUNNER_CRON_WORKERS:-2}
       RUNNER_SEAT_CONCURRENCY: ${RUNNER_SEAT_CONCURRENCY:-}
-      # THE WIDEST BOARD THIS NODE PLAYS. Empty derives it from the engine's own envelope, so every
-      # board a season can enable is claimable here; a number declines the wide ones (their rows go
-      # to a runner that can hold them) and frees a crashed lane sooner. The boot line says which.
+      # THE LONGEST WEDGED OCCURRENCE THIS NODE HOLDS, not a limit on any match: the entrypoint
+      # derives it to exceed the longest match soma's rules can declare, and REFUSES A LOWER ONE --
+      # a runner does not shrink the ladder. Raising it is allowed. The boot line says the number.
       RUNNER_MATCH_TIMEOUT_MS: ${RUNNER_MATCH_TIMEOUT_MS:-}
       RUNNER_MAX_CACHE_BYTES: ${RUNNER_MAX_CACHE_BYTES:-4294967296}
       RUNNER_MAX_LOADED_BYTES: ${RUNNER_MAX_LOADED_BYTES:-2147483648}
@@ -111,10 +112,7 @@ services:
       MALLOC_ARENA_MAX: ${MALLOC_ARENA_MAX:-2}
 
     # Must exceed drain + force, or Docker SIGKILLs a draining match and leaves its row `running`.
-    # Force is the derived match deadline plus five minutes, so this is the widest case (one seat at
-    # a time, the widest board) and a ceiling on the wait, not a wait; RUNNER_MATCH_TIMEOUT_MS
-    # shortens all three together.
-    stop_grace_period: ${RUNNER_STOP_GRACE:-9160s}
+    stop_grace_period: ${RUNNER_STOP_GRACE:-2760s}
 
     # LOOPBACK ONLY: /health and /metrics for the operator, and nothing a network can reach.
     ports:
