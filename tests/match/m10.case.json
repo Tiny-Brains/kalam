@@ -323,6 +323,12 @@
           ]
         },
         "claim": { "token": "ct-1" },
+        "replay": {
+          "url": "http://blobs:9000/tinybrains-replays/replays/m-1/ct-1.json",
+          "endpoint": "http://blobs:9000",
+          "key": "replays/m-1/ct-1.json",
+          "expires_in": 3600
+        },
         "contract": {
           "turn_ms": 1000,
           "max_turns": 10,
@@ -361,12 +367,12 @@
       { "path": "/v1/runner/token" },
       { "path": "/v1/runner/matches/m-1/renew", "body": { "claim_token": "ct-1" } },
       { "path": "/v1/runner/token" },
-      { "path": "/v1/runner/matches/m-1/replay-url", "body": { "claim_token": "ct-1" } },
       { "path": "/tinybrains-replays/replays/m-1/ct-1.json" },
       {
         "path": "/v1/runner/matches/m-1/finish",
         "body": { "claim_token": "ct-1", "turns": 10, "reason": "turn_limit" }
-      }
+      },
+      { "path": "/channels/kalam-match/trigger" }
     ]
   },
   "expect_tasks": [
@@ -509,13 +515,13 @@
     "closeauth.read",
     "closeauth.mint",
     "closeauth.keep",
-    "presign",
     "put",
     "finish",
     "counted",
     "done",
     "over",
     "log_over",
+    "again",
     "stop"
   ]
 }

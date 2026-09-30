@@ -323,6 +323,12 @@
           ]
         },
         "claim": { "token": "ct-1" },
+        "replay": {
+          "url": "http://blobs:9000/tinybrains-replays/replays/m-1/ct-1.json",
+          "endpoint": "http://blobs:9000",
+          "key": "replays/m-1/ct-1.json",
+          "expires_in": 3600
+        },
         "contract": {
           "turn_ms": 1000,
           "max_turns": 10,
@@ -356,8 +362,8 @@
     "data.refs[1].strikes": 0,
     "data.refs[0].infer_turns": 10,
     "data.lease.wait": 100000,
-    "calls.http_call[8].input.body.frame.turn": 10,
-    "calls.http_call[8].input.body.replay_key": "replays/m-1/ct-1.json"
+    "calls.http_call[7].input.body.frame.turn": 10,
+    "calls.http_call[7].input.body.replay_key": "replays/m-1/ct-1.json"
   },
   "expect_calls": {
     "http_call": [
@@ -367,12 +373,12 @@
       { "path": "/models/tb.nano-bc" },
       { "path": "/v1/runner/matches/m-1/start", "body": { "claim_token": "ct-1" } },
       { "path": "/v1/runner/token" },
-      { "path": "/v1/runner/matches/m-1/replay-url", "body": { "claim_token": "ct-1" } },
       { "path": "/tinybrains-replays/replays/m-1/ct-1.json" },
       {
         "path": "/v1/runner/matches/m-1/finish",
         "body": { "claim_token": "ct-1", "turns": 10, "reason": "turn_limit" }
-      }
+      },
+      { "path": "/channels/kalam-match/trigger" }
     ],
     "cache_write": [{ "key": "runner_token" }, { "key": "runner_token" }],
     "cache_delete": []
@@ -512,13 +518,13 @@
     "closeauth.read",
     "closeauth.mint",
     "closeauth.keep",
-    "presign",
     "put",
     "finish",
     "counted",
     "done",
     "over",
     "log_over",
+    "again",
     "stop"
   ]
 }

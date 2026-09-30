@@ -116,7 +116,8 @@
               { "path": "data.claimed", "logic": { "!!": { "var": "temp_data.cl.match.id" } } },
               { "path": "data.row", "logic": { "var": "temp_data.cl.match" } },
               { "path": "data.token", "logic": { "var": "temp_data.cl.claim.token" } },
-              { "path": "data.ct", "logic": { "var": "temp_data.cl.contract" } }
+              { "path": "data.ct", "logic": { "var": "temp_data.cl.contract" } },
+              { "path": "data.replay", "logic": { "var": "temp_data.cl.replay" } }
             ]
           }
         }
@@ -1386,6 +1387,7 @@
         {
           "id": "pick",
           "name": "The result, one element per seat",
+          "description": "",
           "function": {
             "name": "map",
             "input": {
@@ -1451,6 +1453,37 @@
                       }
                     ]
                   }
+                },
+                {
+                  "path": "temp_data.t.signed",
+                  "logic": {
+                    "if": [
+                      {
+                        "and": [
+                          { "var": "data.replay.url" },
+                          {
+                            "<": [
+                              {
+                                "date_diff": [
+                                  { "now": [] },
+                                  { "var": "data.opened_at" },
+                                  "milliseconds"
+                                ]
+                              },
+                              {
+                                "*": [
+                                  { "-": [{ "var": "data.replay.expires_in" }, 300] },
+                                  1000
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      },
+                      { "var": "data.replay" },
+                      null
+                    ]
+                  }
                 }
               ]
             }
@@ -1473,33 +1506,27 @@
               "output": "temp_data.t.last"
             }
           }
-        }
-      ]
-    },
-    {
-      "id": "when_closing",
-      "description": "A fresh token for the calls that close the match. The renew used to refresh it every few seconds of play; paced by time it may not have run for a third of a lease, and a cached token can be down to the last fifth of its life when it is read -- so a lease raised past a few minutes would send the finish on an expired token. A hit on this node's cache almost always; it mints only on a miss.",
-      "condition": {
-        "and": [
-          { "===": [{ "var": "temp_data.t.n_live" }, 0] },
-          { "!": { "var": "data.finished" } }
-        ]
-      },
-      "tasks": [
+        },
         {
           "id": "closeauth",
-          "use": "token"
+          "use": "token",
+          "description": "A fresh token for the calls that close the match. The renew used to refresh it every few seconds of play; paced by time it may not have run for a third of a lease, and a cached token can be down to the last fifth of its life when it is read -- so a lease raised past a few minutes would send the finish on an expired token. A hit on this node's cache almost always; it mints only on a miss."
         }
       ]
     },
     {
       "id": "presign",
       "name": "Ask the gate to sign this attempt's replay PUT",
-      "description": "Hard, not soft: Soma's route always answers `url` for a live claim, and a lost claim is a 409 that should end the run here. Soft, a failed presign ran `put` with a null url, which is a PUT of the whole envelope at the connector root that fails anyway, later and for the wrong reason.",
+      "description": "Only when the claim did not already sign it: Soma signs this attempt's replay PUT on the claim, for an hour, and `pick` takes that URL while at least five minutes of it are left, measured from `opened_at`, which is before the claim was signed. A claim from an older Soma carries none, and a match that outlived it asks here. Hard, not soft: Soma's route always answers `url` for a live claim, and a lost claim is a 409 that should end the run here. Soft, a failed presign ran `put` with a null url, which is a PUT of the whole envelope at the connector root that fails anyway, later and for the wrong reason.",
       "condition": {
         "and": [
-          { "===": [{ "var": "temp_data.t.n_live" }, 0] },
-          { "!": { "var": "data.finished" } }
+          {
+            "and": [
+              { "===": [{ "var": "temp_data.t.n_live" }, 0] },
+              { "!": { "var": "data.finished" } }
+            ]
+          },
+          { "!": { "var": "temp_data.t.signed" } }
         ]
       },
       "function": {
@@ -1655,6 +1682,21 @@
                 "turn": { "var": "temp_data.i" },
                 "turns": { "var": "data.stopped_at_turn" }
               }
+            }
+          }
+        },
+        {
+          "id": "again",
+          "name": "Start this slot's next match now, not at the next tick",
+          "description": "A slot that finished a match used to wait for the next five-second tick before it claimed again: two and a half seconds a match on average, a third of a short one. This asks this node's own admin API for an occurrence of `kalam-match` NOW. It is claimed at the worker's next poll, by which time this run has ended and freed its slot; in the few milliseconds before that, it is recorded `skipped_singleton` and the slot waits for the tick as it always did. Only after a FINISHED match: an idle run, a release or a lost lease must not re-trigger itself, or an empty queue would be polled as fast as the node can. The schedule stays at five seconds because every tick is a row in this node's state database, and at one second a node with every lane busy would add them faster than its one spare worker drains them. A 409 (a scheduled occurrence owns this second already) means a run is coming anyway, so the call is soft.",
+          "continue_on_error": true,
+          "function": {
+            "name": "http_call",
+            "input": {
+              "connector": "kalam-orion",
+              "method": "POST",
+              "path": "/channels/kalam-match/trigger",
+              "output": "temp_data.again"
             }
           }
         }

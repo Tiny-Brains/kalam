@@ -202,8 +202,22 @@ here — which is the right way round: the starter's models are the source of tr
   **The lease is the row's**, not only the deployment's: a renew happens only between turns, so Soma
   sets `lease ≥ 1.5 × (seat_count + 1) × turn_ms` at start and at every renew. A contract without
   `renew_after_ms` is from an older Soma, and the runner falls back to `renew_every_n_turns`.
-  `when_closing` reads the token again before `presign` and `finish`, because the renew was once
-  what kept it fresh and now may not have run for a third of a lease.
+  `closeauth`, at the end of `when_results`, reads the token again before `presign` and `finish`,
+  because the renew was once what kept it fresh and now may not have run for a third of a lease.
+- **The replay PUT rides the claim.** Soma signs this attempt's key on the claim, for an hour, and
+  `open` keeps it as `data.replay`. `pick` takes it while five minutes of it are left, measured from
+  `opened_at` (before the claim was signed), and `presign` asks `replay-url` only when it did not:
+  a claim from an older Soma, or a match that outlived the URL. `put` and `finish` read
+  `temp_data.t.signed` either way, so the two sources must keep the one shape (`url`, `endpoint`,
+  `key`).
+- **A finished match starts the slot's next run at once** (`again`): a manual occurrence of
+  `kalam-match` through this node's own admin API, instead of waiting up to five seconds for the
+  tick. Only after `done`, never after an idle claim, a release or a lost lease, or an empty queue
+  would be polled as fast as the node can run. The schedule stays at five seconds on purpose: every
+  tick is a row in the tmpfs state database, and at one second a node with every lane busy adds
+  them faster than its one spare worker drains them, and a pending row is never cleaned up. A
+  trigger that lands before this run has freed its slot is `skipped_singleton`, and the slot waits
+  for the tick as it always did.
 - **The platform decodes the policy head, not the manifest.** A `result` expression sees only the
   output tensors, so it can't gather at the ants' cells. `infer` asks for `raw: true`, and `decode()`
   branches on the head's rank: `[1,5,H,W]` is gathered at the ants' flat indices, and `[n,5]` is

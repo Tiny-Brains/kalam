@@ -323,6 +323,12 @@
           ]
         },
         "claim": { "token": "ct-1" },
+        "replay": {
+          "url": "http://blobs:9000/tinybrains-replays/replays/m-1/ct-1.json",
+          "endpoint": "http://blobs:9000",
+          "key": "replays/m-1/ct-1.json",
+          "expires_in": 3600
+        },
         "contract": {
           "turn_ms": 1000,
           "max_turns": 10,

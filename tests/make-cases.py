@@ -55,14 +55,21 @@ def row(models, ceiling=5):
 # (a third of the 300 s lease, as Soma sends it) is a renew never due in a match a case plays in
 # well under a second. `renew_after_ms=None` is a contract from a Soma older than the time rule,
 # which the runner renews by turns, every `renew`.
+REPLAY = {"url": "http://blobs:9000/tinybrains-replays/replays/m-1/ct-1.json", "endpoint": "http://blobs:9000",
+          "key": "replays/m-1/ct-1.json", "expires_in": 3600}
+
+
+# THE CLAIM SIGNS THE REPLAY PUT (`replay`), so a match asks replay-url only when the claim carried
+# none (an older Soma) or the URL has under five minutes left. The top-level url/endpoint/key are
+# replay-url's own answer, for those cases.
 def gate(models=("tb.nano-bc", "tb.nano-bc"), max_turns=10, renew=4, ceiling=5,
-         renew_after_ms=100000, retry_after_ms=20000, lease_seconds=300, **over):
+         renew_after_ms=100000, retry_after_ms=20000, lease_seconds=300, replay=REPLAY, **over):
     contract = {"turn_ms": 1000, "max_turns": max_turns, "renew_every_n_turns": renew,
                 "lease_seconds": lease_seconds, "refusal_ceiling": 5}
     if renew_after_ms is not None:
         contract.update(renew_after_ms=renew_after_ms, retry_after_ms=retry_after_ms)
     g = {"token": "tok", "expires_in": 600, "match": row(list(models), ceiling),
-         "claim": {"token": "ct-1"},
+         "claim": {"token": "ct-1"}, "replay": replay,
          "contract": contract,
          "started": True, "applied": True, "state": "finished", "mine": True,
          "url": "http://blobs:9000/tinybrains-replays/replays/m-1/ct-1.json",
@@ -171,13 +178,16 @@ OPEN_CALLS = [{"path": "/v1/runner/token"}, {"path": "/v1/runner/claim"},
               {"path": "/models/tb.nano-bc"}, {"path": "/models/tb.nano-bc"},
               {"path": "/v1/runner/matches/m-1/start", "body": FENCED}]
 RENEW_CALLS = [{"path": "/v1/runner/token"}, {"path": "/v1/runner/matches/m-1/renew", "body": FENCED}]
-CLOSE_CALLS = [{"path": "/v1/runner/token"}, {"path": "/v1/runner/matches/m-1/replay-url", "body": FENCED},
-               {"path": "/tinybrains-replays/replays/m-1/ct-1.json"},
-               {"path": "/v1/runner/matches/m-1/finish", "body": {**FENCED, "turns": 10, "reason": "turn_limit"}}]
+PUT_FINISH = [{"path": "/tinybrains-replays/replays/m-1/ct-1.json"},
+              {"path": "/v1/runner/matches/m-1/finish", "body": {**FENCED, "turns": 10, "reason": "turn_limit"}}]
+CLOSE_CALLS = [{"path": "/v1/runner/token"}] + PUT_FINISH
+SIGN_CALLS = [{"path": "/v1/runner/token"}, {"path": "/v1/runner/matches/m-1/replay-url", "body": FENCED}] + PUT_FINISH
+# A finished match asks this node for the slot's next run at once, rather than at the next tick.
+AGAIN = [{"path": "/channels/kalam-match/trigger"}]
 # A ten-turn match renews NOTHING: its lease is a third of 300 s from running out when it finishes.
 # It still reads the token before it closes (`when_closing`), which is a mint here only because the
 # stubbed cache always misses.
-MATCH_CALLS = OPEN_CALLS + CLOSE_CALLS
+MATCH_CALLS = OPEN_CALLS + CLOSE_CALLS + AGAIN
 # With the cache stubbed (one answer for every read), a run that starts on a miss misses at each
 # renew too, so it mints and keeps once more per renew; a run that starts on a hit never exchanges.
 CACHED_CALLS = [c for c in MATCH_CALLS if c["path"] != "/v1/runner/token"]
@@ -196,7 +206,7 @@ write("match", "M1: a ten-turn match completes, finishes with its frame, and the
       {"data.outcome": "complete", "data.finished": True, "data.stopped_at_turn": 10, "data.struck": 0,
        "data.refs[0].strikes": 0, "data.refs[1].strikes": 0, "data.refs[0].infer_turns": 10,
        "data.lease.wait": 100000,
-       "calls.http_call[8].input.body.frame.turn": 10, "calls.http_call[8].input.body.replay_key": "replays/m-1/ct-1.json"},
+       "calls.http_call[7].input.body.frame.turn": 10, "calls.http_call[7].input.body.replay_key": "replays/m-1/ct-1.json"},
       {"http_call": MATCH_CALLS, "cache_write": [{"key": "runner_token"}] * 2, "cache_delete": []},
       check=frame_present)
 
@@ -214,7 +224,7 @@ write("match", "M3: a renew the gate refuses ends the run as lease_lost, before 
 write("match", "M4: a claim lost by the time of finish leaves the match unfinished", M,
       stubs(gate(state="running", mine=False), {"data": {"status": "active"}}),
       {"data.outcome": None, "data.finished": False},
-      {"http_call": MATCH_CALLS})
+      {"http_call": OPEN_CALLS + CLOSE_CALLS})
 
 write("match", "M5: a seat's model this node does not serve releases the row as model_unavailable", M,
       stubs(gate(), {"data": {"status": "draft"}}),
@@ -235,20 +245,30 @@ write("match", "M7: no token from the gate ends the run as no_token without a cl
 write("match", "M9: a contract from a Soma older than the time rule renews by turns, every renew_every_n_turns", M,
       stubs(gate(renew_after_ms=None), {"data": {"status": "active"}}),
       {"data.outcome": "complete", "data.lease.wait": None},
-      {"http_call": OPEN_CALLS + RENEW_CALLS * 2 + CLOSE_CALLS, "cache_write": [{"key": "runner_token"}] * 4})
+      {"http_call": OPEN_CALLS + RENEW_CALLS * 2 + CLOSE_CALLS + AGAIN, "cache_write": [{"key": "runner_token"}] * 4})
 
 write("match", "M10: a renew that never arrived is retried after retry_after_ms, and the match plays on", M,
       # No `applied` in the answer is a renew that never arrived: neither the claim nor its loss.
       # Due on the first turn (renew_after_ms 0), then not again inside retry_after_ms.
       stubs(gate(applied=None, renew_after_ms=0, retry_after_ms=100000), {"data": {"status": "active"}}),
       {"data.outcome": "complete", "data.lease.wait": 100000},
-      {"http_call": OPEN_CALLS + RENEW_CALLS + CLOSE_CALLS})
+      {"http_call": OPEN_CALLS + RENEW_CALLS + CLOSE_CALLS + AGAIN})
 
 write("match", "M11: a whole lease of the runner's own time with no renew applied ends the run as lease_lapsed", M,
       # A zero lease is lapsed the moment the clock starts; the renew that never arrived renews nothing.
       stubs(gate(applied=None, renew_after_ms=0, lease_seconds=0), {"data": {"status": "active"}}),
       {"data.outcome": "lease_lapsed", "data.finished": False},
       {"http_call": OPEN_CALLS + RENEW_CALLS})
+
+write("match", "M12: a claim that carried no replay URL (an older Soma) asks replay-url before the PUT", M,
+      stubs(gate(replay=None), {"data": {"status": "active"}}),
+      {"data.outcome": "complete", "calls.http_call[8].input.body.replay_key": "replays/m-1/ct-1.json"},
+      {"http_call": OPEN_CALLS + SIGN_CALLS + AGAIN})
+
+write("match", "M13: a claim's replay URL with under five minutes left is not used; replay-url signs a fresh one", M,
+      stubs(gate(replay={**REPLAY, "expires_in": 300}), {"data": {"status": "active"}}),
+      {"data.outcome": "complete"},
+      {"http_call": OPEN_CALLS + SIGN_CALLS + AGAIN})
 
 
 def forgetful_twin():
