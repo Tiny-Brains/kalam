@@ -124,8 +124,10 @@ here — which is the right way round: the starter's models are the source of tr
   and every card rests on turn zero with nothing failing. The task decodes the replay envelope's
   `map`, `seed`, `max_turns` and `deltas`, so a change to what `put` writes is a change here too.
 - **The renew's two failures differ in `api` mode** (`RENEW_LOST`). `applied: false` means the claim
-  is gone, so halt. A call that never arrived means almost nothing, so play on: the lease outlasts
-  the renew interval, and a lost claim is refused at finish. Don't collapse them.
+  is gone, so halt. A call that never arrived means almost nothing, so play on and try again after
+  `retry_after_ms`: the lease outlasts the renew interval, and a lost claim is refused at finish.
+  Don't collapse them. Only a whole lease of this node's own time with no renew applied halts the
+  run (`lease_lapsed`), because by then Soma has reaped the row.
 - **Everything is fenced on one claim token.** The gate mints it and returns it on `claim.token`;
   a runner never invents one. Each fenced route answers its own fate as a field -- `applied`,
   `started`, `state` -- and a task that reads the wrong one cannot tell a lost claim from a win.
@@ -190,9 +192,18 @@ here — which is the right way round: the starter's models are the source of tr
 - **The board rides the claim.** The row carries `map` whole, and `world` passes it to `worldgen`,
   because the component carries no boards. `K_ROW` joins `season_maps` exactly as the gate's claim
   does.
-- **The renew interval is clamped by the row's seat count** in both modes:
-  `renew_every_n_turns × turn_ms × (seat_count + 1) ≤ lease_seconds`, because a turn can cost every
-  seat's deadline plus the step.
+- **The renew is paced by this node's own clock, never by turns.** The contract carries
+  `renew_after_ms` (a third of the row's lease) and `retry_after_ms` (a fifteenth). `clock` stamps
+  `data.lease` before `start` asks, `turn` computes `temp_data.t.due` from the elapsed time, and
+  `paced` restamps it from the moment the turn began, so the runner's clock never runs ahead of the
+  lease the database set. Only elapsed time on one clock is read, never compared with Soma's, so the
+  offset between the machines means nothing. A turn count would have to assume every turn at every
+  seat's deadline, which a real turn is a hundredth of.
+  **The lease is the row's**, not only the deployment's: a renew happens only between turns, so Soma
+  sets `lease ≥ 1.5 × (seat_count + 1) × turn_ms` at start and at every renew. A contract without
+  `renew_after_ms` is from an older Soma, and the runner falls back to `renew_every_n_turns`.
+  `when_closing` reads the token again before `presign` and `finish`, because the renew was once
+  what kept it fresh and now may not have run for a third of a lease.
 - **The platform decodes the policy head, not the manifest.** A `result` expression sees only the
   output tensors, so it can't gather at the ants' cells. `infer` asks for `raw: true`, and `decode()`
   branches on the head's rank: `[1,5,H,W]` is gathered at the ants' flat indices, and `[n,5]` is
@@ -215,7 +226,7 @@ here — which is the right way round: the starter's models are the source of tr
   fails on the first memory match where they differ.
 - **The match loop is `setup`, then one turn per sweep, in a `scratch`.** `loop.setup` holds
   everything that happens once: the vars, the token, the claim and its `open`, the seats' `has`
-  and its barrier, `start`, `worldgen` and `init`; a `terminal` (`noauth`, `idle`, `unready`) or
+  and its barrier, the lease `clock`, `start`, `worldgen` and `init`; a `terminal` (`noauth`, `idle`, `unready`) or
   a halting filter (`vars`, `started`) there ends the run before any sweep. The body is one turn,
   and every per-turn slot (the views, the inferences, the decoded actions, the step, the renew, the
   finish) is under `temp_data.t`, which `scratch` resets before each sweep -- so a read of a
@@ -250,7 +261,8 @@ here — which is the right way round: the starter's models are the source of tr
   its absence.
 - **Kalam never** interprets `wave_state`, an observation, an action or a ref (that would be a
   second engine), retries an inference (a retried turn is a turn played twice), times anything
-  itself (`timeout_ms` on the task is the bound), or calls another package. Its HTTP calls go to its
+  about a match itself (`timeout_ms` on the task is the bound; the one clock it reads paces its
+  lease renewals, and nothing a turn, a strike or a result depends on), or calls another package. Its HTTP calls go to its
   own node's admin API, the gate and the buckets.
 - **Never put a runner in cluster mode or shared state.** The `forbid` keys are local because each
   runner has its own SQLite, which lives on a tmpfs (`/var/lib/orion/state`) and is gone on every

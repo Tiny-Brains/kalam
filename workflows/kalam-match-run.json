@@ -278,6 +278,21 @@
         ]
       },
       {
+        "id": "clock",
+        "name": "Start the lease clock, before the start resets the lease",
+        "description": "The runner paces its renewals by its OWN elapsed time, never by comparing its clock with Soma's, so the offset between the two machines means nothing. Read before `start` asks, so the runner's clock never runs ahead of the database's: the lease `start` sets is at least this old. `wait` is null on a contract from a Soma older than the time rule, which renews by turns instead.",
+        "function": {
+          "name": "map",
+          "input": {
+            "mappings": [
+              { "path": "data.lease.at", "logic": { "now": [] } },
+              { "path": "data.lease.ok", "logic": { "var": "data.lease.at" } },
+              { "path": "data.lease.wait", "logic": { "var": "data.ct.renew_after_ms" } }
+            ]
+          }
+        }
+      },
+      {
         "id": "start",
         "name": "Claimed becomes running",
         "continue_on_error": true,
@@ -564,6 +579,64 @@
                         ]
                       },
                       []
+                    ]
+                  }
+                },
+                { "path": "temp_data.t.now", "logic": { "now": [] } },
+                {
+                  "path": "temp_data.t.due",
+                  "logic": {
+                    "and": [
+                      { ">": [{ "var": "temp_data.t.n_live" }, 0] },
+                      {
+                        "if": [
+                          { "!==": [{ "var": "data.ct.renew_after_ms" }, null] },
+                          {
+                            "or": [
+                              {
+                                ">=": [
+                                  {
+                                    "date_diff": [
+                                      { "var": "temp_data.t.now" },
+                                      { "var": "data.lease.at" },
+                                      "milliseconds"
+                                    ]
+                                  },
+                                  { "var": "data.lease.wait" }
+                                ]
+                              },
+                              {
+                                "<": [
+                                  {
+                                    "date_diff": [
+                                      { "var": "temp_data.t.now" },
+                                      { "var": "data.lease.at" },
+                                      "milliseconds"
+                                    ]
+                                  },
+                                  0
+                                ]
+                              }
+                            ]
+                          },
+                          {
+                            "and": [
+                              { ">": [{ "var": "temp_data.i" }, 0] },
+                              {
+                                "==": [
+                                  {
+                                    "%": [
+                                      { "var": "temp_data.i" },
+                                      { "var": "data.ct.renew_every_n_turns" }
+                                    ]
+                                  },
+                                  0
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      }
                     ]
                   }
                 }
@@ -1151,18 +1224,7 @@
     },
     {
       "id": "when_renew",
-      "condition": {
-        "and": [
-          { ">": [{ "var": "temp_data.t.n_live" }, 0] },
-          { ">": [{ "var": "temp_data.i" }, 0] },
-          {
-            "==": [
-              { "%": [{ "var": "temp_data.i" }, { "var": "data.ct.renew_every_n_turns" }] },
-              0
-            ]
-          }
-        ]
-      },
+      "condition": { "var": "temp_data.t.due" },
       "tasks": [
         {
           "id": "reauth",
@@ -1183,6 +1245,39 @@
               "output": "temp_data.t.renewed"
             }
           }
+        },
+        {
+          "id": "paced",
+          "name": "When the next renew is due",
+          "description": "From the moment this turn began, which is before the renew asked, so the runner's clock never runs ahead of the lease the database set. Applied: the next renew a third of the lease on (`renew_after_ms`). Never arrived -- no answer, or none with `applied` -- means almost nothing: play on and try again after `retry_after_ms`. Refused (`applied: false`) is `when_lost`, which halts.",
+          "function": {
+            "name": "map",
+            "input": {
+              "mappings": [
+                { "path": "data.lease.at", "logic": { "var": "temp_data.t.now" } },
+                {
+                  "path": "data.lease.ok",
+                  "logic": {
+                    "if": [
+                      { "===": [{ "var": "temp_data.t.renewed.applied" }, true] },
+                      { "var": "temp_data.t.now" },
+                      { "var": "data.lease.ok" }
+                    ]
+                  }
+                },
+                {
+                  "path": "data.lease.wait",
+                  "logic": {
+                    "if": [
+                      { "===": [{ "var": "temp_data.t.renewed.applied" }, true] },
+                      { "var": "data.ct.renew_after_ms" },
+                      { "var": "data.ct.retry_after_ms" }
+                    ]
+                  }
+                }
+              ]
+            }
+          }
         }
       ]
     },
@@ -1190,18 +1285,7 @@
       "id": "when_lost",
       "condition": {
         "and": [
-          {
-            "and": [
-              { ">": [{ "var": "temp_data.t.n_live" }, 0] },
-              { ">": [{ "var": "temp_data.i" }, 0] },
-              {
-                "==": [
-                  { "%": [{ "var": "temp_data.i" }, { "var": "data.ct.renew_every_n_turns" }] },
-                  0
-                ]
-              }
-            ]
-          },
+          { "var": "temp_data.t.due" },
           { "===": [{ "var": "temp_data.t.renewed.applied" }, false] }
         ]
       },
@@ -1229,6 +1313,55 @@
           "function": {
             "name": "map",
             "input": { "mappings": [{ "path": "data.outcome", "logic": "lease_lost" }] }
+          }
+        }
+      ]
+    },
+    {
+      "id": "when_lapsed",
+      "description": "A whole lease of the runner's own time without a renew that applied: Soma has reaped the row, or will before this match could finish, and its finish would be refused. Stop now and free the slot rather than play on for nothing. Only the RATE of the two clocks matters here, never their offset. Off on a contract from a Soma older than the time rule.",
+      "condition": {
+        "and": [
+          { ">": [{ "var": "temp_data.t.n_live" }, 0] },
+          { "!==": [{ "var": "data.ct.renew_after_ms" }, null] },
+          {
+            ">=": [
+              {
+                "date_diff": [
+                  { "var": "temp_data.t.now" },
+                  { "var": "data.lease.ok" },
+                  "milliseconds"
+                ]
+              },
+              { "*": [{ "var": "data.ct.lease_seconds" }, 1000] }
+            ]
+          }
+        ]
+      },
+      "tasks": [
+        {
+          "id": "log_lapsed",
+          "name": "One line for the run",
+          "function": {
+            "name": "log",
+            "input": {
+              "message": "kalam-match: run ended",
+              "level": "info",
+              "fields": {
+                "match_id": { "var": "data.row.id" },
+                "outcome": "lease_lapsed",
+                "turn": { "var": "temp_data.i" }
+              }
+            }
+          }
+        },
+        {
+          "id": "lapsed",
+          "name": "Halt: no renew applied for a whole lease",
+          "terminal": true,
+          "function": {
+            "name": "map",
+            "input": { "mappings": [{ "path": "data.outcome", "logic": "lease_lapsed" }] }
           }
         }
       ]
@@ -1340,6 +1473,22 @@
               "output": "temp_data.t.last"
             }
           }
+        }
+      ]
+    },
+    {
+      "id": "when_closing",
+      "description": "A fresh token for the calls that close the match. The renew used to refresh it every few seconds of play; paced by time it may not have run for a third of a lease, and a cached token can be down to the last fifth of its life when it is read -- so a lease raised past a few minutes would send the finish on an expired token. A hit on this node's cache almost always; it mints only on a miss.",
+      "condition": {
+        "and": [
+          { "===": [{ "var": "temp_data.t.n_live" }, 0] },
+          { "!": { "var": "data.finished" } }
+        ]
+      },
+      "tasks": [
+        {
+          "id": "closeauth",
+          "use": "token"
         }
       ]
     },

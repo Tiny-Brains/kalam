@@ -328,7 +328,9 @@
           "max_turns": 10,
           "renew_every_n_turns": 4,
           "lease_seconds": 300,
-          "refusal_ceiling": 5
+          "refusal_ceiling": 5,
+          "renew_after_ms": 100000,
+          "retry_after_ms": 20000
         },
         "started": true,
         "applied": true,

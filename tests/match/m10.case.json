@@ -1,5 +1,5 @@
 {
-  "name": "M8: a seat whose model declares a memory is handed it back every turn, and only that seat",
+  "name": "M10: a renew that never arrived is retried after retry_after_ms, and the match plays on",
   "workflow": "../../workflows/kalam-match-run.json",
   "input": {},
   "metadata": {
@@ -308,7 +308,7 @@
           "seats": [
             {
               "seat": 0,
-              "model": "tb.nano-bc-max-r",
+              "model": "tb.nano-bc",
               "weights_hash": "sha256:w",
               "manifest_hash": "sha256:m",
               "strike_ceiling": 5
@@ -329,11 +329,11 @@
           "renew_every_n_turns": 4,
           "lease_seconds": 300,
           "refusal_ceiling": 5,
-          "renew_after_ms": 100000,
-          "retry_after_ms": 20000
+          "renew_after_ms": 0,
+          "retry_after_ms": 100000
         },
         "started": true,
-        "applied": true,
+        "applied": null,
         "state": "finished",
         "mine": true,
         "url": "http://blobs:9000/tinybrains-replays/replays/m-1/ct-1.json",
@@ -349,16 +349,25 @@
   },
   "expect": {
     "data.outcome": "complete",
-    "data.stopped_at_turn": 10,
-    "data.struck": 0,
-    "data.refs[0].strikes": 0,
-    "data.refs[0].infer_turns": 10,
-    "data.mem0.tensor.dtype": "i8",
-    "data.mem0.tensor.shape": [1, 2, 24, 24],
-    "data.mem0.tensor.data": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAABAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAEAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-    "data.amem0": null,
-    "data.mem1": null,
-    "data.amem1": null
+    "data.lease.wait": 100000
+  },
+  "expect_calls": {
+    "http_call": [
+      { "path": "/v1/runner/token" },
+      { "path": "/v1/runner/claim" },
+      { "path": "/models/tb.nano-bc" },
+      { "path": "/models/tb.nano-bc" },
+      { "path": "/v1/runner/matches/m-1/start", "body": { "claim_token": "ct-1" } },
+      { "path": "/v1/runner/token" },
+      { "path": "/v1/runner/matches/m-1/renew", "body": { "claim_token": "ct-1" } },
+      { "path": "/v1/runner/token" },
+      { "path": "/v1/runner/matches/m-1/replay-url", "body": { "claim_token": "ct-1" } },
+      { "path": "/tinybrains-replays/replays/m-1/ct-1.json" },
+      {
+        "path": "/v1/runner/matches/m-1/finish",
+        "body": { "claim_token": "ct-1", "turns": 10, "reason": "turn_limit" }
+      }
+    ]
   },
   "expect_tasks": [
     "begin",
@@ -387,6 +396,11 @@
     "moves",
     "step",
     "carry",
+    "reauth.read",
+    "reauth.mint",
+    "reauth.keep",
+    "renew",
+    "paced",
     "stop",
     "observe",
     "turn",
