@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-`kalam` ships **no server code**. It is an Orion **1.11.1** package, which the orion-server in its
+`kalam` ships **no server code**. It is an Orion **1.12.0** package, which the orion-server in its
 runner image applies to itself at boot (`[packages] apply`). It has three clocks. **`kalam-match`** is
 ONE channel whose `concurrency.slots` is how many matches this node plays at once, each run of
 `kalam-match-run`: claim ONE queued row, then `observe` → one `model_infer` fanned out over the
@@ -202,7 +202,7 @@ here — which is the right way round: the starter's models are the source of tr
   **The lease is the row's**, not only the deployment's: a renew happens only between turns, so Soma
   sets `lease ≥ 1.5 × (seat_count + 1) × turn_ms` at start and at every renew. A contract without
   `renew_after_ms` is from an older Soma, and the runner falls back to `renew_every_n_turns`.
-  `closeauth`, at the end of `when_results`, reads the token again before `presign` and `finish`,
+  `closeauth`, in `when_end`, reads the token again before `presign` and `finish`,
   because the renew was once what kept it fresh and now may not have run for a third of a lease.
 - **The replay PUT rides the claim.** Soma signs this attempt's key on the claim, for an hour, and
   `open` keeps it as `data.replay`. `pick` takes it while five minutes of it are left, measured from
@@ -218,10 +218,15 @@ here — which is the right way round: the starter's models are the source of tr
   them faster than its one spare worker drains them, and a pending row is never cleaned up. A
   trigger that lands before this run has freed its slot is `skipped_singleton`, and the slot waits
   for the tick as it always did.
-- **The platform decodes the policy head, not the manifest.** A `result` expression sees only the
-  output tensors, so it can't gather at the ants' cells. `infer` asks for `raw: true`, and `decode()`
-  branches on the head's rank: `[1,5,H,W]` is gathered at the ants' flat indices, and `[n,5]` is
-  already in `mine` order.
+- **The platform decodes the policy head, not the manifest, and it does so inside the call.** A
+  manifest's `result` sees only the output tensors, so it can't gather at the ants' cells. `infer`
+  gives `model_infer` a `select` of its own, which sees the outputs and the call's `input` (the
+  seat's view): it branches on the head's rank (`[1,5,H,W]` is gathered at the ants' flat indices
+  `size[1]*row + col`, and `[n,5]` is already in `mine` order), takes the argmax and spells it with
+  `substr` of `"NESW-"`, and passes `memory` and `ant_memory` through. So only `{act, memory,
+  ant_memory}` is written and no head ever enters the message. `select` is evaluated on the same
+  engine and under the same `engine.ops_budget` as any expression; it is the platform's, and a
+  competitor's manifest never sees it.
 - **`cli/src/wave.rs` and `cli/src/model.rs` are a deliberate second implementation** of the head
   decode, the explicit `{m, seat, action}` form, omission as the no-op (a forfeited seat, or one with
   no ants), cumulative strikes, `engine_rank + seat_count` for forfeit ranks, and the flat echoed
@@ -230,13 +235,13 @@ here — which is the right way round: the starter's models are the source of tr
   declare outputs named `memory` and `ant_memory` beside `policy`. `turn` writes
   `temp_data.v{{seat}}.memory` from `data.mem{{seat}}` (and `.ant_memory` from `data.amem{{seat}}`)
   before `temp_data.live` copies the views, so the seat's view carries them under those keys; the
-  end of `acts` writes `data.mem{{seat}}` from `temp_data.p{{seat}}.memory ?? data.mem{{seat}}`. A
-  failed call leaves `p{{seat}}` unset, so the `??` keeps the last memory, and `on_null: "unset"`
+  `acts` writes `data.mem{{seat}}` from the seat's answer's `memory` `?? data.mem{{seat}}`. A
+  failed call writes no answer, so the `??` keeps the last memory, and `on_null: "unset"`
   keeps the key absent until a call first writes one: absent on turn 0, carried through a strike,
   never shared between seats (each has its own slot, even two seats of one model), gone with the
   run. A model that declares neither never has a key written. The view's top-level `memory` and
   `ant_memory` are the runner's, and ants' engine test asserts it never emits either. The value is
-  the raw output tensor; `cli/src/wave.rs` carries the same keys under the same rules, and `conform`
+  the output tensor as `select` passed it through; `cli/src/wave.rs` carries the same keys under the same rules, and `conform`
   fails on the first memory match where they differ.
 - **The match loop is `setup`, then one turn per sweep, in a `scratch`.** `loop.setup` holds
   everything that happens once: the vars, the token, the claim and its `open`, the seats' `has`
@@ -268,6 +273,20 @@ here — which is the right way round: the starter's models are the source of tr
   submission back to the queue, so the same failure in `errored` or `reason` would hide
   `MEMORY_ROUND_TRIP` until the submission expired. The key names are a contract with Soma's
   `admission_facts()`, so `grep round_trip` in Soma's migration before renaming one.
+- **WHAT THE MESSAGE CARRIES IS PAID FOR ON EVERY STEP.** Orion copies the whole message into an
+  arena for every async condition, every templated handler field and every run of sync tasks, about
+  forty times a turn, tensor bytes and the replay stream included. So a slot is unset once its last
+  reader is done: `temp_data.cl` in `open`, `temp_data.ms` in `barrier`, `temp_data.w0` in `init`,
+  `temp_data.t.obs` at the end of `turn`, and the views, the answers (`infs`) and the stats at the
+  end of `moves`. A head never enters the message at all (see `select` above): a `[1,5,H,W]` head
+  is 297 KB on the widest board. A new read of any of them after that point reads null. The
+  finishing sweep is ONE group, `when_end`, so an ordinary turn evaluates one condition for it, not
+  five. And the replay stream is extended in place: `carry` writes the turn's delta onto
+  `data.deltas` with `"mode": "extend"`, which costs the delta and not the array. The `merge` idiom
+  rebuilt the whole array every turn, O(turns²), and Orion prices `merge` per item against
+  `engine.ops_budget`, so a long stream built with it would also edge towards the ceiling.
+  **A change here must keep the replay byte for byte:** time it, and diff the `put` body
+  and the finish result, against HEAD on a long match before trusting it.
 - **A seat with no ants is not asked.** Its decoded action would be `[]`, which is falsy and would
   be struck as a miss.
 - **The strike ceiling comes off the match row** (`matches.strike_ceiling`, stamped by pair from the
@@ -394,8 +413,9 @@ JSONLogic (datalogic):
   resolve selects the falsy elements instead of failing. Use `===`/`!==`. Likewise `{">=": [1, null]}`
   is true, which is why the `vars` task halts on any missing `[vars]` value.
 - **`{"+": [null, x]}` is silent.** Seed every counter at 0 (the refs' `strikes` and `infer_*` fields).
-- **`{"val": [...]}` path segments are evaluated,** so an index can be computed. That is how the
-  decode turns an argmax into a direction; there is no `at` operator.
+- **`{"val": [...]}` path segments are evaluated,** so an index can be computed; there is no `at`
+  operator. A literal array is not an operand `val` can index (a leading array is a scope jump), which
+  is why the decode spells a direction with `substr` of `"NESW-"`.
 - **`{"merge": [A, B]}` concatenates two computed arrays**, but `{"merge": <one expression>}` doesn't
   flatten at all.
 - **Floor milliseconds where they become microseconds.** `inference_ms` is a float and the

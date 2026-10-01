@@ -117,7 +117,8 @@
               { "path": "data.row", "logic": { "var": "temp_data.cl.match" } },
               { "path": "data.token", "logic": { "var": "temp_data.cl.claim.token" } },
               { "path": "data.ct", "logic": { "var": "temp_data.cl.contract" } },
-              { "path": "data.replay", "logic": { "var": "temp_data.cl.replay" } }
+              { "path": "data.replay", "logic": { "var": "temp_data.cl.replay" } },
+              { "path": "temp_data.cl", "unset": true }
             ]
           }
         }
@@ -230,7 +231,8 @@
                     }
                   ]
                 }
-              }
+              },
+              { "path": "temp_data.ms", "unset": true }
             ]
           }
         }
@@ -340,7 +342,10 @@
         "function": {
           "name": "map",
           "input": {
-            "mappings": [{ "path": "data.state", "logic": { "var": "temp_data.w0.wave_state" } }]
+            "mappings": [
+              { "path": "data.state", "logic": { "var": "temp_data.w0.wave_state" } },
+              { "path": "temp_data.w0", "unset": true }
+            ]
           }
         }
       }
@@ -640,7 +645,8 @@
                       }
                     ]
                   }
-                }
+                },
+                { "path": "temp_data.t.obs", "unset": true }
               ]
             }
           }
@@ -668,7 +674,66 @@
               "model": { "var": "temp_data.sv.model" },
               "input": { "var": "temp_data.sv.view" },
               "output": "temp_data.t.inf.p",
-              "raw": true,
+              "select": {
+                "act": {
+                  "map": [
+                    {
+                      "argmax": [
+                        {
+                          "if": [
+                            { "==": [{ "length": [{ "shape": [{ "var": "policy" }] }] }, 4] },
+                            {
+                              "transpose": [
+                                {
+                                  "gather": [
+                                    {
+                                      "reshape": [
+                                        { "var": "policy" },
+                                        [
+                                          5,
+                                          {
+                                            "*": [
+                                              { "var": "input.size.0" },
+                                              { "var": "input.size.1" }
+                                            ]
+                                          }
+                                        ]
+                                      ]
+                                    },
+                                    {
+                                      "map": [
+                                        { "var": "input.mine" },
+                                        {
+                                          "+": [
+                                            {
+                                              "*": [
+                                                { "val": [[1], "input", "size", 1] },
+                                                { "var": "0" }
+                                              ]
+                                            },
+                                            { "var": "1" }
+                                          ]
+                                        }
+                                      ]
+                                    },
+                                    1
+                                  ]
+                                },
+                                [1, 0]
+                              ]
+                            },
+                            { "var": "policy" }
+                          ]
+                        },
+                        1
+                      ]
+                    },
+                    { "substr": ["NESW-", { "var": "" }, 1] }
+                  ]
+                },
+                "memory": { "var": "memory" },
+                "ant_memory": { "var": "ant_memory" }
+              },
               "timeout_ms": { "var": "data.ct.turn_ms" },
               "stats_output": "temp_data.t.inf.s"
             }
@@ -684,7 +749,7 @@
                 {
                   "$each": { "seat": { "$from": "constants.seats" } },
                   "do": {
-                    "path": "temp_data.t.p{{seat}}",
+                    "path": "temp_data.t.act{{seat}}",
                     "logic": {
                       "if": [
                         {
@@ -731,7 +796,8 @@
                                 0
                               ]
                             },
-                            "p"
+                            "p",
+                            "act"
                           ]
                         },
                         null
@@ -802,66 +868,64 @@
                 {
                   "$each": { "seat": { "$from": "constants.seats" } },
                   "do": {
-                    "path": "temp_data.t.a{{seat}}",
-                    "logic": {
-                      "if": [
-                        {
-                          "!": {
-                            "and": [
-                              { ">": [{ "var": "temp_data.t.n_live" }, 0] },
-                              { ">": [{ "var": "data.row.seat_count" }, { "$param": "seat" }] },
-                              { "!": { "var": "data.f{{seat}}" } },
-                              { "!!": [{ "var": "temp_data.t.v{{seat}}.mine" }] }
-                            ]
-                          }
-                        },
-                        null,
-                        {
-                          "map": [
-                            {
-                              "reduce": [
-                                {
-                                  "if": [
-                                    { "var": "temp_data.t.v{{seat}}.mine" },
-                                    { "var": "temp_data.t.v{{seat}}.mine" },
-                                    []
-                                  ]
-                                },
-                                {
-                                  "merge": [
-                                    { "var": "accumulator" },
-                                    [
-                                      {
-                                        "+": [
-                                          {
-                                            "*": [
-                                              { "val": [[1], "temp_data", "t", "w"] },
-                                              { "var": "current.0" }
-                                            ]
-                                          },
-                                          { "var": "current.1" }
-                                        ]
-                                      }
-                                    ]
-                                  ]
-                                },
-                                []
-                              ]
-                            },
-                            { "var": "" }
-                          ]
-                        }
-                      ]
-                    }
-                  }
-                },
-                {
-                  "$each": { "seat": { "$from": "constants.seats" } },
-                  "do": {
                     "path": "data.mem{{seat}}",
                     "logic": {
                       "??": [
-                        { "var": "temp_data.t.p{{seat}}.memory" },
+                        {
+                          "if": [
+                            {
+                              "===": [
+                                {
+                                  "val": [
+                                    "temp_data",
+                                    "t",
+                                    "live",
+                                    {
+                                      "reduce": [
+                                        { "var": "temp_data.t.live" },
+                                        {
+                                          "if": [
+                                            {
+                                              "<": [{ "var": "current.seat" }, { "$param": "seat" }]
+                                            },
+                                            { "+": [{ "var": "accumulator" }, 1] },
+                                            { "var": "accumulator" }
+                                          ]
+                                        },
+                                        0
+                                      ]
+                                    },
+                                    "seat"
+                                  ]
+                                },
+                                { "$param": "seat" }
+                              ]
+                            },
+                            {
+                              "val": [
+                                "temp_data",
+                                "t",
+                                "infs",
+                                {
+                                  "reduce": [
+                                    { "var": "temp_data.t.live" },
+                                    {
+                                      "if": [
+                                        { "<": [{ "var": "current.seat" }, { "$param": "seat" }] },
+                                        { "+": [{ "var": "accumulator" }, 1] },
+                                        { "var": "accumulator" }
+                                      ]
+                                    },
+                                    0
+                                  ]
+                                },
+                                "p",
+                                "memory"
+                              ]
+                            },
+                            null
+                          ]
+                        },
                         { "var": "data.mem{{seat}}" }
                       ]
                     },
@@ -874,7 +938,61 @@
                     "path": "data.amem{{seat}}",
                     "logic": {
                       "??": [
-                        { "var": "temp_data.t.p{{seat}}.ant_memory" },
+                        {
+                          "if": [
+                            {
+                              "===": [
+                                {
+                                  "val": [
+                                    "temp_data",
+                                    "t",
+                                    "live",
+                                    {
+                                      "reduce": [
+                                        { "var": "temp_data.t.live" },
+                                        {
+                                          "if": [
+                                            {
+                                              "<": [{ "var": "current.seat" }, { "$param": "seat" }]
+                                            },
+                                            { "+": [{ "var": "accumulator" }, 1] },
+                                            { "var": "accumulator" }
+                                          ]
+                                        },
+                                        0
+                                      ]
+                                    },
+                                    "seat"
+                                  ]
+                                },
+                                { "$param": "seat" }
+                              ]
+                            },
+                            {
+                              "val": [
+                                "temp_data",
+                                "t",
+                                "infs",
+                                {
+                                  "reduce": [
+                                    { "var": "temp_data.t.live" },
+                                    {
+                                      "if": [
+                                        { "<": [{ "var": "current.seat" }, { "$param": "seat" }] },
+                                        { "+": [{ "var": "accumulator" }, 1] },
+                                        { "var": "accumulator" }
+                                      ]
+                                    },
+                                    0
+                                  ]
+                                },
+                                "p",
+                                "ant_memory"
+                              ]
+                            },
+                            null
+                          ]
+                        },
                         { "var": "data.amem{{seat}}" }
                       ]
                     },
@@ -884,84 +1002,7 @@
               ]
             }
           }
-        }
-      ]
-    },
-    {
-      "$each": { "seat": { "$from": "constants.seats" } },
-      "do": {
-        "id": "act{{seat}}",
-        "name": "Seat {{seat}}: the head, decoded",
-        "condition": {
-          "and": [
-            { ">": [{ "var": "temp_data.t.n_live" }, 0] },
-            { ">": [{ "var": "data.row.seat_count" }, { "$param": "seat" }] },
-            { "!": { "var": "data.f{{seat}}" } },
-            { "!!": [{ "var": "temp_data.t.v{{seat}}.mine" }] }
-          ]
         },
-        "function": {
-          "name": "map",
-          "input": {
-            "mappings": [
-              { "path": "temp_data.t.idx", "logic": { "var": "temp_data.t.a{{seat}}" } },
-              {
-                "path": "temp_data.t.act{{seat}}",
-                "logic": {
-                  "if": [
-                    { "!": { "var": "temp_data.t.p{{seat}}.policy" } },
-                    null,
-                    {
-                      "map": [
-                        {
-                          "argmax": [
-                            {
-                              "if": [
-                                {
-                                  "==": [
-                                    { "length": [{ "shape": [{ "var": "temp_data.t.p{{seat}}.policy" }] }] },
-                                    4
-                                  ]
-                                },
-                                {
-                                  "transpose": [
-                                    {
-                                      "gather": [
-                                        {
-                                          "reshape": [
-                                            { "var": "temp_data.t.p{{seat}}.policy" },
-                                            [5, { "var": "temp_data.t.cells" }]
-                                          ]
-                                        },
-                                        { "var": "temp_data.t.idx" },
-                                        1
-                                      ]
-                                    },
-                                    [1, 0]
-                                  ]
-                                },
-                                { "var": "temp_data.t.p{{seat}}.policy" }
-                              ]
-                            },
-                            1
-                          ]
-                        },
-                        { "val": [[1], "data", "dirs", { "var": "" }] }
-                      ]
-                    }
-                  ]
-                },
-                "on_null": "unset"
-              }
-            ]
-          }
-        }
-      }
-    },
-    {
-      "id": "when_moves",
-      "condition": { ">": [{ "var": "temp_data.t.n_live" }, 0] },
-      "tasks": [
         {
           "id": "moves",
           "name": "The turn's actions, and what they cost",
@@ -1186,6 +1227,16 @@
                       }
                     ]
                   }
+                },
+                { "path": "temp_data.t.infs", "unset": true },
+                { "path": "temp_data.t.live", "unset": true },
+                {
+                  "$each": { "seat": { "$from": "constants.seats" } },
+                  "do": { "path": "temp_data.t.v{{seat}}", "unset": true }
+                },
+                {
+                  "$each": { "seat": { "$from": "constants.seats" } },
+                  "do": { "path": "temp_data.t.s{{seat}}", "unset": true }
                 }
               ]
             }
@@ -1206,6 +1257,7 @@
         {
           "id": "carry",
           "name": "Carry the state and the replay stream",
+          "description": "THE REPLAY STREAM IS EXTENDED IN PLACE. `mode: extend` pushes the turn's delta onto `data.deltas` at the cost of the delta alone; the `merge` idiom rebuilt the whole array every turn, which made a match's replay O(turns squared) and is priced per item against `engine.ops_budget`.",
           "function": {
             "name": "map",
             "input": {
@@ -1213,9 +1265,8 @@
                 { "path": "data.state", "logic": { "var": "temp_data.t.st.wave_state" } },
                 {
                   "path": "data.deltas",
-                  "logic": {
-                    "merge": [{ "var": "data.deltas" }, { "var": "temp_data.t.st.replay_delta" }]
-                  }
+                  "logic": { "var": "temp_data.t.st.replay_delta" },
+                  "mode": "extend"
                 }
               ]
             }
@@ -1368,7 +1419,8 @@
       ]
     },
     {
-      "id": "when_results",
+      "id": "when_end",
+      "description": "The finishing sweep, under ONE condition: every task that closes the match -- the results, the frame, the token, the replay PUT and the finish -- only ever runs when no seat is live and the match is not yet finished. Each of them used to carry that condition itself, and an async task's condition is evaluated against a copy of the whole message, replay stream included, so every ordinary turn paid five copies for five answers of no.",
       "condition": {
         "and": [
           { "===": [{ "var": "temp_data.t.n_live" }, 0] },
@@ -1511,45 +1563,24 @@
           "id": "closeauth",
           "use": "token",
           "description": "A fresh token for the calls that close the match. The renew used to refresh it every few seconds of play; paced by time it may not have run for a third of a lease, and a cached token can be down to the last fifth of its life when it is read -- so a lease raised past a few minutes would send the finish on an expired token. A hit on this node's cache almost always; it mints only on a miss."
-        }
-      ]
-    },
-    {
-      "id": "presign",
-      "name": "Ask the gate to sign this attempt's replay PUT",
-      "description": "Only when the claim did not already sign it: Soma signs this attempt's replay PUT on the claim, for an hour, and `pick` takes that URL while at least five minutes of it are left, measured from `opened_at`, which is before the claim was signed. A claim from an older Soma carries none, and a match that outlived it asks here. Hard, not soft: Soma's route always answers `url` for a live claim, and a lost claim is a 409 that should end the run here. Soft, a failed presign ran `put` with a null url, which is a PUT of the whole envelope at the connector root that fails anyway, later and for the wrong reason.",
-      "condition": {
-        "and": [
-          {
-            "and": [
-              { "===": [{ "var": "temp_data.t.n_live" }, 0] },
-              { "!": { "var": "data.finished" } }
-            ]
-          },
-          { "!": { "var": "temp_data.t.signed" } }
-        ]
-      },
-      "function": {
-        "name": "http_call",
-        "input": {
-          "connector": "kalam-api",
-          "method": "POST",
-          "path": { "cat": ["/v1/runner/matches/", { "var": "data.row.id" }, "/replay-url"] },
-          "headers": { "Authorization": { "cat": ["Bearer ", { "var": "data.tok.token" }] } },
-          "body": { "claim_token": { "var": "data.token" } },
-          "output": "temp_data.t.signed"
-        }
-      }
-    },
-    {
-      "id": "when_signed",
-      "condition": {
-        "and": [
-          { "===": [{ "var": "temp_data.t.n_live" }, 0] },
-          { "!": { "var": "data.finished" } }
-        ]
-      },
-      "tasks": [
+        },
+        {
+          "id": "presign",
+          "name": "Ask the gate to sign this attempt's replay PUT",
+          "description": "Only when the claim did not already sign it: Soma signs this attempt's replay PUT on the claim, for an hour, and `pick` takes that URL while at least five minutes of it are left, measured from `opened_at`, which is before the claim was signed. A claim from an older Soma carries none, and a match that outlived it asks here. Hard, not soft: Soma's route always answers `url` for a live claim, and a lost claim is a 409 that should end the run here. Soft, a failed presign ran `put` with a null url, which is a PUT of the whole envelope at the connector root that fails anyway, later and for the wrong reason.",
+          "condition": { "!": { "var": "temp_data.t.signed" } },
+          "function": {
+            "name": "http_call",
+            "input": {
+              "connector": "kalam-api",
+              "method": "POST",
+              "path": { "cat": ["/v1/runner/matches/", { "var": "data.row.id" }, "/replay-url"] },
+              "headers": { "Authorization": { "cat": ["Bearer ", { "var": "data.tok.token" }] } },
+              "body": { "claim_token": { "var": "data.token" } },
+              "output": "temp_data.t.signed"
+            }
+          }
+        },
         {
           "id": "put",
           "name": "Write the replay envelope",
@@ -1585,50 +1616,33 @@
               "response_format": "text"
             }
           }
-        }
-      ]
-    },
-    {
-      "id": "finish",
-      "name": "Finish the row -- one statement, on the token",
-      "condition": {
-        "and": [
-          { "===": [{ "var": "temp_data.t.n_live" }, 0] },
-          { "!": { "var": "data.finished" } }
-        ]
-      },
-      "continue_on_error": true,
-      "function": {
-        "name": "http_call",
-        "input": {
-          "connector": "kalam-api",
-          "method": "POST",
-          "path": { "cat": ["/v1/runner/matches/", { "var": "data.row.id" }, "/finish"] },
-          "headers": { "Authorization": { "cat": ["Bearer ", { "var": "data.tok.token" }] } },
-          "body": {
-            "claim_token": { "var": "data.token" },
-            "result": { "var": "temp_data.t.seatrows.items" },
-            "reason": { "var": "temp_data.t.res.reason" },
-            "turns": { "var": "temp_data.t.res.turns" },
-            "opened_at": { "var": "data.opened_at" },
-            "engine_digest": { "var": "metadata.vars.engine_digest" },
-            "orion_version": { "var": "metadata.vars.orion_version" },
-            "replay_key": { "var": "temp_data.t.signed.key" },
-            "frame": { "var": "temp_data.t.last.frame" }
-          },
-          "output": "temp_data.t.wrote"
-        }
-      }
-    },
-    {
-      "id": "when_counted",
-      "condition": {
-        "and": [
-          { "===": [{ "var": "temp_data.t.n_live" }, 0] },
-          { "!": { "var": "data.finished" } }
-        ]
-      },
-      "tasks": [
+        },
+        {
+          "id": "finish",
+          "name": "Finish the row -- one statement, on the token",
+          "continue_on_error": true,
+          "function": {
+            "name": "http_call",
+            "input": {
+              "connector": "kalam-api",
+              "method": "POST",
+              "path": { "cat": ["/v1/runner/matches/", { "var": "data.row.id" }, "/finish"] },
+              "headers": { "Authorization": { "cat": ["Bearer ", { "var": "data.tok.token" }] } },
+              "body": {
+                "claim_token": { "var": "data.token" },
+                "result": { "var": "temp_data.t.seatrows.items" },
+                "reason": { "var": "temp_data.t.res.reason" },
+                "turns": { "var": "temp_data.t.res.turns" },
+                "opened_at": { "var": "data.opened_at" },
+                "engine_digest": { "var": "metadata.vars.engine_digest" },
+                "orion_version": { "var": "metadata.vars.orion_version" },
+                "replay_key": { "var": "temp_data.t.signed.key" },
+                "frame": { "var": "temp_data.t.last.frame" }
+              },
+              "output": "temp_data.t.wrote"
+            }
+          }
+        },
         {
           "id": "counted",
           "name": "Halt unless the row is finished",
